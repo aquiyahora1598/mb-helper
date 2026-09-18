@@ -38,7 +38,6 @@ def build_exe():
         "--name", "MB_Helper",
         "--add-data", add_data_arg,
         "--hidden-import", "keyboard",
-        "--hidden-import", "minimap_window",
         "--hidden-import", "telemetry_logger",
         "--hidden-import", "phantom_reader",
         "--hidden-import", "phantom_bot",
@@ -48,7 +47,7 @@ def build_exe():
     print("Comando:", " ".join(cmd))
     res = subprocess.run(cmd, cwd=BASE_DIR)
     if res.returncode != 0:
-        print("❌ Error en compilación PyInstaller")
+        print("[ERROR] Error en compilación PyInstaller")
         sys.exit(res.returncode)
 
     print("\n=== [3/3] Empaquetando Release Portable (.zip) ===")

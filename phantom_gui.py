@@ -1,10 +1,9 @@
 """
-Megabonk Helper - Aplicacion Externa Legal para Steam Leaderboards
+MB Helper - Aplicacion Externa Legal para Steam Leaderboards
 Autor: Asistente AI & Usuario
 100% Legal: Cero inyeccion de DLLs en el directorio del juego.
 Lectura pasiva de memoria + Automatizacion con hardware input nativo y vision artificial.
 Atajo Global F5 para Iniciar / Detener en cualquier momento sin Alt+Tab.
-Atajo Global F6 para Abrir / Cerrar Radar 2D de Interactuables en tiempo real.
 """
 
 import tkinter as tk
@@ -35,7 +34,6 @@ from phantom_reader import (
 )
 from phantom_bot import PhantomBot
 from telemetry_logger import TelemetryLogger
-from minimap_window import MinimapWindow
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
@@ -200,7 +198,6 @@ I18N = {
         "btn_stop": "⏸ DETENER BUSQUEDA [F5]",
         "btn_test_reset": "⚡ Probar Reinicio ('R')",
         "btn_logs": "📄 Ver Registro",
-        "btn_minimap": "🗺️ Minimapa [F6]",
         "badge_afk": "🛡️ Pausa AFK",
         "attempts": "Intentos",
         "time": "Tiempo",
@@ -298,7 +295,6 @@ I18N = {
         "btn_stop": "⏸ STOP SEARCH [F5]",
         "btn_test_reset": "⚡ Test Reset ('R')",
         "btn_logs": "📄 View Log",
-        "btn_minimap": "🗺️ Minimap [F6]",
         "badge_afk": "🛡️ AFK Pause",
         "attempts": "Attempts",
         "time": "Time",
@@ -396,7 +392,6 @@ I18N = {
         "btn_stop": "⏸ PARAR BUSCA [F5]",
         "btn_test_reset": "⚡ Testar Reinicio ('R')",
         "btn_logs": "📄 Ver Registro",
-        "btn_minimap": "🗺️ Minimapa [F6]",
         "badge_afk": "🛡️ Pausa AFK",
         "attempts": "Tentativas",
         "time": "Tempo",
@@ -542,7 +537,6 @@ class MegabonkHelperApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.current_lang = "es"
-        self.minimap_win = None
         self.title(self.t("title"))
         self.geometry("1080x820")
         self.minsize(760, 480)
@@ -620,7 +614,6 @@ class MegabonkHelperApp(tk.Tk):
 
         # Atajos de teclado locales Tkinter
         self.bind("<F5>", lambda e: self.trigger_f5_action())
-        self.bind("<F6>", lambda e: self.toggle_minimap())
 
         # Desplazamiento global con rueda del raton (MouseWheel) para ventanas reducidas
         self.bind_all("<MouseWheel>", self._on_global_mousewheel)
@@ -662,8 +655,6 @@ class MegabonkHelperApp(tk.Tk):
         else:
             self.current_lang = "es"
         self.update_ui_language()
-        if hasattr(self, "minimap_win") and self.minimap_win:
-            self.minimap_win.set_language(self.current_lang)
 
     def update_ui_language(self):
         self.title(self.t("title"))
@@ -738,8 +729,6 @@ class MegabonkHelperApp(tk.Tk):
         self.btn_test_reset.config(text=self.t("btn_test_reset"))
         if hasattr(self, "btn_logs"):
             self.btn_logs.config(text=self.t("btn_logs"))
-        if hasattr(self, "btn_minimap"):
-            self.btn_minimap.config(text=self.t("btn_minimap"))
         self.badge_afk.config(text=self.t("badge_afk"))
 
         # Actualizar estado de objetivo de preset o tier
@@ -751,11 +740,6 @@ class MegabonkHelperApp(tk.Tk):
     def on_exit(self):
         self.is_closing = True
         self.is_running = False
-        if hasattr(self, "minimap_win") and self.minimap_win:
-            try:
-                self.minimap_win.close()
-            except Exception:
-                pass
         if hasattr(self, "telemetry") and self.telemetry:
             try:
                 self.telemetry.stop()
@@ -918,23 +902,6 @@ class MegabonkHelperApp(tk.Tk):
             command=self.open_log_file
         )
         self.btn_logs.pack(side="left", padx=4)
-
-        self.btn_minimap = tk.Button(
-            ctrl_row1,
-            text=self.t("btn_minimap"),
-            font=("Bahnschrift", 9),
-            bg=COLOR_CARD_ALT,
-            fg="#93C5FD",
-            activebackground="#2A3048",
-            activeforeground="#FFFFFF",
-            relief="flat",
-            padx=10,
-            pady=7,
-            cursor="hand2",
-            command=self.toggle_minimap
-        )
-        self.btn_minimap.pack(side="left", padx=4)
-
         self.badge_afk = tk.Label(
             ctrl_row1,
             text=self.t("badge_afk"),
@@ -1785,13 +1752,6 @@ class MegabonkHelperApp(tk.Tk):
             if hasattr(self, "tab4_canvas"):
                 self.tab4_canvas.yview_moveto(0)
 
-    def toggle_minimap(self):
-        if self.minimap_win is not None and self.minimap_win.is_open:
-            self.minimap_win.close()
-            self.minimap_win = None
-        else:
-            self.minimap_win = MinimapWindow(self, self.reader, lang=self.current_lang)
-
     def test_quick_reset(self):
         connected = self.reader.find_process()
         if not connected:
@@ -1813,7 +1773,7 @@ class MegabonkHelperApp(tk.Tk):
             messagebox.showerror("Error", f"No se pudo abrir el archivo de log: {e}")
 
     # ==========================================================
-    # ATAJOS GLOBALES DE TECLADO (F5 y F6)
+    # ATAJO GLOBAL DE TECLADO (F5)
     # ==========================================================
     def trigger_f5_action(self):
         now = time.time()
@@ -1826,7 +1786,6 @@ class MegabonkHelperApp(tk.Tk):
         if keyboard is not None:
             try:
                 keyboard.add_hotkey("f5", self.trigger_f5_action, suppress=False)
-                keyboard.add_hotkey("f6", lambda: self.after(0, self.toggle_minimap), suppress=False)
             except Exception:
                 pass
 
@@ -1835,11 +1794,10 @@ class MegabonkHelperApp(tk.Tk):
 
     def hotkey_listener_loop(self):
         """
-        Sondea el estado fisico de las teclas F5 y F6 en todo Windows (GetAsyncKeyState & 0x8000).
+        Sondea el estado fisico de la tecla F5 en todo Windows (GetAsyncKeyState & 0x8000).
         Responde en menos de 20ms sin importar el foco, incluso en pantalla completa DirectX.
         """
         f5_was_down = False
-        f6_was_down = False
         while not self.is_closing:
             try:
                 # 0x74 = VK_F5 (Iniciar/Detener Busqueda)
@@ -1847,12 +1805,6 @@ class MegabonkHelperApp(tk.Tk):
                 if f5_is_down and not f5_was_down:
                     self.trigger_f5_action()
                 f5_was_down = f5_is_down
-
-                # 0x75 = VK_F6 (Minimapa Radar 2D)
-                f6_is_down = bool(user32.GetAsyncKeyState(0x75) & 0x8000)
-                if f6_is_down and not f6_was_down:
-                    self.after(0, self.toggle_minimap)
-                f6_was_down = f6_is_down
             except Exception:
                 pass
             time.sleep(0.02)
@@ -2111,7 +2063,6 @@ class MegabonkHelperApp(tk.Tk):
         self.last_reroll_time = time.time()
         self.current_map_detected_time = None
         if self.reader:
-            self.reader.clear_discovered_landmarks()
             self.reader._cached_vendor_regions = []
         self.bot.trigger_restart(pid=self.reader.pid)
 

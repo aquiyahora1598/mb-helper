@@ -20,7 +20,7 @@
 - 🇺🇸 **English** (Native)
 - 🇧🇷 **Português (Brasil)** (Nativo)
 
-*Todos los 88 ítems oficiales, interfaz, diálogos y minimapa táctico están 100% traducidos y localizados.*
+*Todos los 88 ítems oficiales, interfaz y alertas del sistema están 100% traducidos y localizados.*
 
 ---
 
@@ -34,13 +34,11 @@
    - **Modo 2 (Vendedores Dorados):** Filtra partidas con 1, 2 o 3 vendedores legendarios (0.1% chance).
    - **Modo 3 (Específico):** Filtros cuantitativos exactos para Moáis, Maldiciones de Jefe, Microondas, Santuarios y Cofres.
    - **Modo 4 (Puntuación & Plantillas):** Algoritmo de scoring competitivo con rangos objetivos (*Perfect+*, *Perfect*, *Good*, *Light*) y presets rápidos (*Record Mundial*, *Lluvia de Moáis*, *2x Microondas*, etc.), combinable con ítems y dorados.
-3. **🗺️ Radar 2D / Minimapa Táctico en Tiempo Real (`F6`):**
-   - Visualiza al jugador y todos los interactuables del mapa (Moáis, Maldiciones, Microondas, Vendedores Dorados, Balizas) en un radar vectorial HUD flotante.
-4. **⏸️ Pausa de Seguridad AFK Automática:**
+3. **⏸️ Pausa de Seguridad AFK Automática:**
    - Al encontrar la semilla objetivo, el bot envía automáticamente la señal de pausa (`Esc`) para proteger al jugador de enemigos mientras esté ausente.
-5. **⚡ Atajos Globales de Baja Latencia (`F5` y `F6`):**
+4. **⚡ Atajo Global de Baja Latencia (`F5`):**
    - Sondeo asíncrono nativo (`GetAsyncKeyState`) que responde en menos de 20ms incluso con el juego en pantalla completa DirectX sin requerir Alt+Tab.
-6. **🩺 Watchdog de Salud y Degradación de Memoria:**
+5. **🩺 Watchdog de Salud y Degradación de Memoria:**
    - Detecta si las recargas del motor se ralentizan tras partidas largas y avisa al usuario para reiniciar el juego y recuperar máxima velocidad.
 
 ---
@@ -79,7 +77,6 @@
 3. Selecciona tu Modo objetivo (1, 2, 3 o 4) y configura tus requisitos.
 4. Entra a una partida y pulsa **F5** (o haz clic en `▶ INICIAR BÚSQUEDA`).
 5. El bot reiniciará rápidamente hasta encontrar la semilla ganadora y pausará el juego automáticamente.
-6. Puedes abrir y cerrar el Radar 2D en cualquier momento pulsando **F6**.
 
 ---
 
@@ -90,7 +87,6 @@
 │   └── item_icons/        # 88 Iconos oficiales de ítems
 ├── phantom_reader.py      # Lector de memoria pasivo con catálogo de 88 ítems (ES, EN, PT)
 ├── phantom_bot.py         # Módulo de reinicio ('R') y pausa AFK ('Esc') nativos
-├── minimap_window.py      # Radar táctico 2D independiente (ES, EN, PT)
 ├── telemetry_logger.py    # Recolector de telemetría pasivo para análisis
 ├── phantom_gui.py         # Interfaz gráfica principal moderna (Dark Cybernetic)
 ├── build_release.py       # Script de empaquetado automático a PyInstaller y .zip

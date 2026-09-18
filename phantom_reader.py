@@ -333,14 +333,7 @@ class PhantomMemoryReader:
         self._last_metadata_scan_time = 0.0
         self._last_vendor_heap_sweep_time = 0.0
         self._dict_key_cache = {}
-        self._discovered_landmarks = {}  # ptr -> dict
-        self._last_player_pos = None
         self._mem_lock = threading.RLock()
-
-    def clear_discovered_landmarks(self):
-        with self._mem_lock:
-            self._discovered_landmarks.clear()
-            self._last_player_pos = None
 
     def find_process(self):
         snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
@@ -1177,11 +1170,6 @@ class PhantomMemoryReader:
                     "items": items
                 })
 
-            # 3. Incorporar todos los interactuables auto-descubiertos en vivo mediante MyPlayer
-            for obj_ptr, lm in self._discovered_landmarks.items():
-                if lm.get("type") != "shady" and obj_ptr not in seen_instances:
-                    landmarks.append(dict(lm))
-
             return landmarks
 
     def activity_is_active(self, object_ptr, class_name):
@@ -1205,144 +1193,6 @@ class PhantomMemoryReader:
         except Exception:
             return True
 
-    def read_player_state(self):
-        """
-        Lee la posición 3D exacta del jugador en tiempo real y auto-detecta cualquier interactuable
-        próximo mediante MyPlayer.Instance -> PlayerInput -> DetectInteractables (< 0.05ms, 0% lag).
-        """
-        result = {
-            "player_pos": None,
-            "active_interactable": None
-        }
-        if not self.handle or not self.ga_base:
-            return result
-
-        with self._mem_lock:
-            try:
-                # 1. MyPlayer (RVA 0x2F620F8)
-                class_ptr = self.read_ptr(self.ga_base + RVA_MY_PLAYER_TYPEINFO)
-                if not class_ptr or class_ptr > 0x7FFFFFFFFFFF:
-                    return result
-                # Filtrar token metadata no inicializado (0x2000xxxx de 32 bits, ver BonkScanner)
-                if class_ptr <= 0xFFFFFFFF and (class_ptr & 0xE0000000) == 0x20000000:
-                    return result
-
-                static_fields = self.read_ptr(class_ptr + 0xB8)
-                if not static_fields:
-                    return result
-
-                player = self.read_ptr(static_fields + MY_PLAYER_INSTANCE_OFFSET)
-                if not player or player <= 0x10000:
-                    return result
-
-                # Posición 3D del jugador
-                px, py, pz = None, None, None
-                p_pos = self.get_world_position(player)
-                if p_pos and math.isfinite(p_pos[0]) and math.isfinite(p_pos[2]):
-                    px, py, pz = round(p_pos[0], 1), round(p_pos[1], 1), round(p_pos[2], 1)
-                    if abs(px) <= 400.0 and abs(pz) <= 400.0:
-                        result["player_pos"] = (px, py, pz)
-                        self._last_player_pos = (px, py, pz)
-
-                # 2. PlayerInput (+0x48) -> DetectInteractables (+0x20) -> currentInteractable (+0x28)
-                player_input = self.read_ptr(player + PLAYER_INPUT_OFFSET)
-                if not player_input:
-                    return result
-
-                detector = self.read_ptr(player_input + DETECT_INTERACTABLES_OFFSET)
-                if not detector:
-                    return result
-
-                current_ptr = self.read_ptr(detector + CURRENT_INTERACTABLE_OFFSET)
-                if not current_ptr or current_ptr <= 0x10000:
-                    return result
-
-                inst_class = self.read_ptr(current_ptr)
-                if not inst_class or inst_class <= 0x10000:
-                    return result
-
-                name_ptr = self.read_ptr(inst_class + 0x10)
-                class_name = self.read_ascii_string(name_ptr, 40) if name_ptr else ""
-
-                LANDMARK_META = {
-                    "InteractableShrineMoai": ("moai", "🗿 Moái", "#06B6D4", "🗿"),
-                    "InteractableShrineCursed": ("curse", "💀 Maldición Jefe", "#EF4444", "💀"),
-                    "ChargeShrine": ("charge", "⚡ Santuario Carga", "#FBBF24", "⚡"),
-                    "InteractableShrineGreed": ("greed", "💰 Santuario Codicia", "#10B981", "💰"),
-                    "InteractableShrineMagnet": ("magnet", "🧲 Santuario Imán", "#D946EF", "🧲"),
-                    "InteractableShrineBalance": ("balance", "⚖️ Equilibrio", "#38BDF8", "⚖️"),
-                    "InteractableShrineChallenge": ("challenge", "⚔️ Desafío", "#F43F5E", "⚔️"),
-                    "InteractableMicrowave": ("microwave", "☢️ Microondas", "#FB923C", "☢️"),
-                    "InteractableShadyGuy": ("shady", "🛒 Vendedor", "#F59E0B", "👑"),
-                    "InteractableEgg": ("egg", "🥚 Huevo", "#A3E635", "🥚"),
-                    "InteractableCharacterFight": ("character", "🌳 Arbusto Sus", "#22C55E", "🌳"),
-                }
-
-                if class_name in LANDMARK_META:
-                    if not self.activity_is_active(current_ptr, class_name):
-                        return result
-
-                    type_id, base_label, color, icon = LANDMARK_META[class_name]
-                    is_gold = False
-                    rarity_val = 0
-                    r_name = ""
-
-                    # Manejo específico de rarezas para Vendedores y Microondas
-                    if class_name == "InteractableShadyGuy":
-                        rarity_val = self.read_int32(current_ptr + 0x90) or 0
-                        is_gold = (rarity_val == 3)
-                        if is_gold:
-                            base_label = "👑 Vendedor (Dorado)"
-                            color = "#F59E0B"
-                            icon = "👑"
-                        elif rarity_val == 2:
-                            base_label = "🛒 Vendedor (Épico)"
-                            color = "#A855F7"
-                        elif rarity_val == 1:
-                            base_label = "🛒 Vendedor (Raro)"
-                            color = "#3B82F6"
-                        else:
-                            base_label = "🛒 Vendedor (Común)"
-                            color = "#94A3B8"
-                    elif class_name == "InteractableMicrowave":
-                        m_rarity = self.read_int32(current_ptr + 0x80) or 0
-                        if m_rarity == 1:
-                            is_gold = True
-                            base_label = "👑 Microondas Dorado"
-                            color = "#F59E0B"
-
-                    # Obtener coordenadas reales con fallback infalible a posición del jugador
-                    w_pos = self.get_world_position(current_ptr)
-                    if w_pos and (abs(w_pos[0]) > 0.5 or abs(w_pos[2]) > 0.5):
-                        x, y, z = round(w_pos[0], 1), round(w_pos[1], 1), round(w_pos[2], 1)
-                    elif px is not None and pz is not None:
-                        x, y, z = px, py, pz
-                    else:
-                        x, y, z = None, None, None
-
-                    if x is not None and z is not None and abs(x) <= 350.0 and abs(z) <= 350.0:
-                        lm = {
-                            "type": type_id,
-                            "label": base_label,
-                            "color": color,
-                            "icon": icon,
-                            "x": x,
-                            "y": y,
-                            "z": z,
-                            "has_coords": True,
-                            "object_ptr": current_ptr,
-                            "rarity": rarity_val,
-                            "rarity_name": r_name,
-                            "is_golden": is_gold,
-                            "items": []
-                        }
-                        result["active_interactable"] = lm
-                        self._discovered_landmarks[current_ptr] = lm
-            except Exception:
-                pass
-
-        return result
-
     def read_full_player_stats(self):
         """
         Lee en < 0.1ms las 27 estadísticas completas de combate y progresión, nivel, oro,
@@ -1363,7 +1213,7 @@ class PhantomMemoryReader:
             "items": {},
             "weapons": [],
             "tomes": [],
-            "player_pos": self._last_player_pos
+            "player_pos": None
         }
         if not self.handle or not self.ga_base:
             return result
