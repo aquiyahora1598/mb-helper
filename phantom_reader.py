@@ -830,6 +830,7 @@ class PhantomMemoryReader:
         result = {
             "boss_curses": 0,
             "moais": 0,
+            "bald_heads": 0,
             "charge_shrines": 0,
             "greed_shrines": 0,
             "magnet_shrines": 0,
@@ -880,6 +881,8 @@ class PhantomMemoryReader:
 
             if "curse" in k:
                 result["boss_curses"] = num_total
+            elif "bald" in k:
+                result["bald_heads"] = num_total
             elif "moai" in k:
                 result["moais"] = num_total
             elif "charge" in k:
@@ -1578,7 +1581,22 @@ PRESET_TEMPLATES = {
         "min_vendors": 0,
         "min_microwaves": 2,
         "min_boss": 0,
+        "min_bald_heads": 0,
+        "map": "general",
         "desc": "Garantiza 2 microondas para duplicar ítems con puntaje decente."
+    },
+    "graveyard_bald_heads": {
+        "id": "graveyard_bald_heads",
+        "name": "💀 Moáis Calvos (10+)",
+        "tier": "Normal",
+        "min_score": 0.0,
+        "min_moais": 0,
+        "min_vendors": 0,
+        "min_microwaves": 0,
+        "min_boss": 0,
+        "min_bald_heads": 10,
+        "map": "graveyard",
+        "desc": "Estrategia de Cementerio: garantiza al menos 10 Moáis Calvos (Bald Heads)."
     }
 }
 

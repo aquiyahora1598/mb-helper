@@ -125,6 +125,7 @@ LIMITS_MAP = {
     "vendors_golden": ("Vendedores Dorados", "Golden Vendors", "Vendedores Dourados", 3, "👑"),
     "boss_curses": ("Maldiciones de Jefe", "Boss Curses", "Maldições de Chefe", 3, "💀"),
     "moais": ("Moais de Piedra", "Stone Moais", "Moais de Pedra", 3, "🗿"),
+    "bald_heads": ("Cabezas Calvas (Cementerio)", "Bald Heads (Graveyard)", "Cabeças Calvas (Cemitério)", 20, "💀"),
     "charge_shrines": ("Torres de Carga", "Upgrade Towers", "Torres de Carga", 20, "🏛️"),
     "greed_shrines": ("Santuarios de Codicia", "Greed Shrines", "Santuários de Ganância", 12, "💰"),
     "magnet_shrines": ("Santuarios de Iman", "Magnet Shrines", "Santuários de Ímã", 6, "🧲"),
@@ -187,12 +188,15 @@ I18N = {
         "score_meter_title": "📊 MEDIDOR DE PUNTUACION EN VIVO:",
         "score_waiting": "Puntaje: 0.0 pts  |  Rango: Esperando...",
         # Presets
+        "preset_sec_forest": "🌿 Plantillas Bosque / Desierto",
+        "preset_sec_graveyard": "⚰️ Plantillas Cementerio",
         "preset_wr": "🏆 Record Mundial (Perfect+)",
         "preset_good": "⭐ Gran Partida (Perfect)",
         "preset_fast": "⏱️ Busqueda Rapida (Good)",
         "preset_moai": "🗿 Lluvia Moais (5+)",
         "preset_vendor": "💰 Vendedores 5+ (Shady)",
         "preset_micro": "⚡ 2x Microondas",
+        "preset_graveyard_bald": "💀 Moáis Calvos (10+)",
         # Bottom controls
         "btn_start": "▶ INICIAR BUSQUEDA [F5]",
         "btn_stop": "⏸ DETENER BUSQUEDA [F5]",
@@ -284,12 +288,15 @@ I18N = {
         "score_meter_title": "📊 LIVE SCORE METER:",
         "score_waiting": "Score: 0.0 pts  |  Tier: Waiting...",
         # Presets
+        "preset_sec_forest": "🌿 Forest / Desert Templates",
+        "preset_sec_graveyard": "⚰️ Graveyard Templates",
         "preset_wr": "🏆 World Record (Perfect+)",
         "preset_good": "⭐ Great Run (Perfect)",
         "preset_fast": "⏱️ Fast Search (Good)",
         "preset_moai": "🗿 Moai Rain (5+)",
         "preset_vendor": "💰 Vendors 5+ (Shady)",
         "preset_micro": "⚡ 2x Microwaves",
+        "preset_graveyard_bald": "💀 Bald Heads (10+)",
         # Bottom controls
         "btn_start": "▶ START SEARCH [F5]",
         "btn_stop": "⏸ STOP SEARCH [F5]",
@@ -381,12 +388,15 @@ I18N = {
         "score_meter_title": "📊 MEDIDOR DE SCORE EM TEMPO REAL:",
         "score_waiting": "Pontos: 0.0 pts  |  Tier: Aguardando...",
         # Presets
+        "preset_sec_forest": "🌿 Modelos Floresta / Deserto",
+        "preset_sec_graveyard": "⚰️ Modelos Cemitério",
         "preset_wr": "🏆 Recorde Mundial (Perfect+)",
         "preset_good": "⭐ Otima Partida (Perfect)",
         "preset_fast": "⏱️ Busca Rapida (Good)",
         "preset_moai": "🗿 Chuva de Moais (5+)",
         "preset_vendor": "💰 Vendedores 5+ (Shady)",
         "preset_micro": "⚡ 2x Micro-ondas",
+        "preset_graveyard_bald": "💀 Cabeças Calvas (10+)",
         # Bottom controls
         "btn_start": "▶ INICIAR BUSCA [F5]",
         "btn_stop": "⏸ PARAR BUSCA [F5]",
@@ -462,6 +472,11 @@ PRESET_HOVER_DATA = {
             "title": "⚡ 2x Microondas",
             "tier": "Tier: ⚪ LIGHT (Score >= 18.0 pts)",
             "reqs": "• Requisitos: Minimo 2 Microondas + Score >= 18.0 pts\n• Probabilidad: ~5% (~5-10 segundos)\n• Uso: Duplicacion y coccion de items."
+        },
+        "graveyard_bald_heads": {
+            "title": "💀 Moáis Calvos (10+ Bald Heads)",
+            "tier": "Mapa: ⚰️ CEMENTERIO",
+            "reqs": "• Requisitos: Minimo 10 Moais Calvos (Bald Heads)\n• Mapa: Exclusivo de Cementerio\n• Uso: Estrategia de Moais calvos en Cementerio."
         }
     },
     "en": {
@@ -494,6 +509,11 @@ PRESET_HOVER_DATA = {
             "title": "⚡ 2x Microwaves",
             "tier": "Tier: ⚪ LIGHT (Score >= 18.0 pts)",
             "reqs": "• Requirements: Minimum 2 Microwaves + Score >= 18.0 pts\n• Probability: ~5% (~5-10 seconds)\n• Usage: Item duplication and crafting."
+        },
+        "graveyard_bald_heads": {
+            "title": "💀 Bald Heads (10+ Graveyard Moais)",
+            "tier": "Map: ⚰️ GRAVEYARD",
+            "reqs": "• Requirements: Minimum 10 Bald Heads\n• Map: Exclusive to Graveyard\n• Usage: Graveyard Bald Heads Moai strategy."
         }
     },
     "pt": {
@@ -526,6 +546,11 @@ PRESET_HOVER_DATA = {
             "title": "⚡ 2x Micro-ondas",
             "tier": "Tier: ⚪ LIGHT (Score >= 18.0 pts)",
             "reqs": "• Requisitos: Minimo 2 Micro-ondas + Score >= 18.0 pts\n• Chance: ~5% (~5-10 segundos)\n• Uso: Estrategias de duplicacao de itens."
+        },
+        "graveyard_bald_heads": {
+            "title": "💀 Cabecas Calvas (10+ Moais Cemiterio)",
+            "tier": "Mapa: ⚰️ CEMITERIO",
+            "reqs": "• Requisitos: Minimo 10 Cabecas Calvas (Bald Heads)\n• Mapa: Exclusivo de Cemiterio\n• Uso: Estrategia de Moais calvos no Cemiterio."
         }
     }
 }
@@ -699,6 +724,10 @@ class MegabonkHelperApp(tk.Tk):
         self.lbl_tab4_title.config(text=self.t("tab4_title"))
         self.lbl_tier_sec_title.config(text=self.t("tier_title"))
         self.lbl_preset_sec_title.config(text=self.t("preset_title"))
+        if hasattr(self, "lbl_forest_title"):
+            self.lbl_forest_title.config(text=self.t("preset_sec_forest"))
+        if hasattr(self, "lbl_graveyard_title"):
+            self.lbl_graveyard_title.config(text=self.t("preset_sec_graveyard"))
 
         # Presets text
         preset_key_map = {
@@ -708,6 +737,7 @@ class MegabonkHelperApp(tk.Tk):
             "moai_rain": "preset_moai",
             "vendor_paradise": "preset_vendor",
             "double_microwave": "preset_micro",
+            "graveyard_bald_heads": "preset_graveyard_bald",
         }
         for pid, btn in self.preset_buttons.items():
             key = preset_key_map.get(pid)
@@ -1424,9 +1454,19 @@ class MegabonkHelperApp(tk.Tk):
             bg=COLOR_CARD_ALT,
             fg=COLOR_PURPLE
         )
-        self.lbl_preset_sec_title.pack(anchor="w", pady=(0, 4))
+        self.lbl_preset_sec_title.pack(anchor="w", pady=(0, 2))
 
-        presets_list = [
+        # SUBSECCION 1: BOSQUE Y DESIERTO
+        self.lbl_forest_title = tk.Label(
+            right_col,
+            text=self.t("preset_sec_forest"),
+            font=("Bahnschrift", 9, "bold"),
+            bg=COLOR_CARD_ALT,
+            fg="#6EE7B7"
+        )
+        self.lbl_forest_title.pack(anchor="w", pady=(2, 2))
+
+        forest_presets = [
             ("record_perfect_plus", "🏆 Record Mundial (Perfect+)", "#EF4444"),
             ("record_perfect", "⭐ Gran Partida (Perfect)", "#FBBF24"),
             ("fast_good", "⏱️ Busqueda Rapida (Good)", "#22C55E"),
@@ -1436,10 +1476,10 @@ class MegabonkHelperApp(tk.Tk):
         ]
 
         preset_grid = tk.Frame(right_col, bg=COLOR_CARD_ALT)
-        preset_grid.pack(fill="both", expand=True)
+        preset_grid.pack(fill="x")
 
         self.preset_buttons = {}
-        for p_idx, (p_id, p_name, p_color) in enumerate(presets_list):
+        for p_idx, (p_id, p_name, p_color) in enumerate(forest_presets):
             p_row = p_idx // 2
             p_col = p_idx % 2
             btn_preset = tk.Button(
@@ -1452,16 +1492,48 @@ class MegabonkHelperApp(tk.Tk):
                 activeforeground="#FFFFFF",
                 relief="flat",
                 padx=6,
-                pady=6,
+                pady=4,
                 wraplength=170,
                 cursor="hand2",
                 command=lambda pid=p_id: self.apply_preset_template(pid)
             )
-            btn_preset.grid(row=p_row, column=p_col, padx=4, pady=3, sticky="ew")
+            btn_preset.grid(row=p_row, column=p_col, padx=4, pady=2, sticky="ew")
             btn_preset.bind("<Enter>", lambda e, pid=p_id: self.on_preset_hover(pid))
             btn_preset.bind("<Leave>", lambda e: self.on_preset_leave())
             preset_grid.columnconfigure(p_col, weight=1)
             self.preset_buttons[p_id] = btn_preset
+
+        # SUBSECCION 2: CEMENTERIO (SEPARADA Y DESTACADA)
+        graveyard_box = tk.Frame(right_col, bg="#181528", highlightbackground="#6D28D9", highlightthickness=1, padx=6, pady=4)
+        graveyard_box.pack(fill="x", pady=(6, 2))
+
+        self.lbl_graveyard_title = tk.Label(
+            graveyard_box,
+            text=self.t("preset_sec_graveyard"),
+            font=("Bahnschrift", 9, "bold"),
+            bg="#181528",
+            fg="#C084FC"
+        )
+        self.lbl_graveyard_title.pack(anchor="w", pady=(0, 2))
+
+        btn_grave = tk.Button(
+            graveyard_box,
+            text=self.t("preset_graveyard_bald"),
+            font=("Bahnschrift", 9, "bold"),
+            bg=COLOR_CARD,
+            fg="#A78BFA",
+            activebackground="#2D2248",
+            activeforeground="#FFFFFF",
+            relief="flat",
+            padx=8,
+            pady=4,
+            cursor="hand2",
+            command=lambda: self.apply_preset_template("graveyard_bald_heads")
+        )
+        btn_grave.pack(fill="x")
+        btn_grave.bind("<Enter>", lambda e: self.on_preset_hover("graveyard_bald_heads"))
+        btn_grave.bind("<Leave>", lambda e: self.on_preset_leave())
+        self.preset_buttons["graveyard_bald_heads"] = btn_grave
 
         self.lbl_preset_active = tk.Label(
             right_col,
@@ -2223,9 +2295,11 @@ class MegabonkHelperApp(tk.Tk):
             tier_val = stats.get("tier", "Normal")
             self.safe_ui_update(self.update_live_score_ui, stats)
 
+            bald = stats.get("bald_heads", 0)
+            bald_str = f" | Calvos: {bald}" if bald > 0 else ""
             summary_text = (
                 f"⭐ {self.t('stat_score')}: {score_val:.1f} [{tier_val}] | "
-                f"Moáis: {stats.get('moais', 0)} | "
+                f"Moáis: {stats.get('moais', 0)}{bald_str} | "
                 f"Maldiciones: {stats.get('boss_curses', 0)} | "
                 f"Micros: {stats.get('microwaves', 0)} | "
                 f"Cofres: {stats.get('chests', 0)}"
@@ -2238,7 +2312,7 @@ class MegabonkHelperApp(tk.Tk):
             if not template_matches:
                 # No cumple -> REINICIO INMEDIATO (< 0.35s)! Cero tiempo perdido en vendedores.
                 log_event(
-                    f"Intento #{self.attempt_count}: Score={score_val:.1f} ({tier_val}) | Moáis={stats.get('moais',0)} Mald={stats.get('boss_curses',0)} Micros={stats.get('microwaves',0)} -> No cumple. Reiniciando...",
+                    f"Intento #{self.attempt_count}: Score={score_val:.1f} ({tier_val}) | Moáis={stats.get('moais',0)}{bald_str} Mald={stats.get('boss_curses',0)} Micros={stats.get('microwaves',0)} -> No cumple. Reiniciando...",
                     level="REROLL"
                 )
                 self.trigger_reroll_step()
@@ -2519,6 +2593,8 @@ class MegabonkHelperApp(tk.Tk):
             if tmpl.get("min_microwaves", 0) > 0 and microwaves < tmpl["min_microwaves"]:
                 return False
             if tmpl.get("min_boss", 0) > 0 and boss < tmpl["min_boss"]:
+                return False
+            if tmpl.get("min_bald_heads", 0) > 0 and stats.get("bald_heads", 0) < tmpl["min_bald_heads"]:
                 return False
 
             req_tier = tmpl.get("tier")
