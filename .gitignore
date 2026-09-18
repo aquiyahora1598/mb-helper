@@ -1,0 +1,30 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.bak
+*.dll
+
+# PyInstaller / Build
+build/
+dist/
+*.spec
+*.zip
+
+# Logs & Telemetry Databases
+megabonk_helper.log
+*.log
+telemetry.db
+*.db
+*.sqlite3
+
+# Scratch & Temporary Analysis
+scratch/
+graphify-out/
+
+# Environments & IDEs
+.vscode/
+.idea/
+.env
+venv/
+ENV/
