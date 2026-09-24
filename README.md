@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](#)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](#)
 
-**MB Helper** es una herramienta externa para encontrar semillas récord de mapa en tiempo real mediante lectura pasiva de memoria (`ReadProcessMemory`). Diseñada para la comunidad competitiva y speedrunners.
+**MB Helper** es una suite externa que incluye un **contador flotante (HUD) de duración de Powerups en tiempo real** y un **buscador de semillas récord de mapa** mediante lectura pasiva de memoria (`ReadProcessMemory`). Diseñada para la comunidad competitiva y speedrunners.
 
 > [!IMPORTANT]
 > **100% Legal para Steam Leaderboards:**
@@ -28,17 +28,23 @@
 
 1. **🛡️ 100% Externo y Pasivo (Cero Inyección):**
    - No altera archivos del juego ni inyecta DLLs.
-   - Funciona externamente con llamadas estándar de Windows API.
-2. **🎯 4 Modos de Búsqueda Avanzados:**
+   - Funciona externamente con llamadas estándar de Windows API (`ReadProcessMemory`).
+2. **⏱️ Overlay Flotante de Powerups en Tiempo Real (`F6`):**
+   - **HUD minimalista negro mate y números blancos** con esquinas redondeadas nativas por hardware (Windows 11 DWM).
+   - Cronometra en vivo la duración y barra de progreso al recoger **Reloj (Time Freeze), Escudo, Furia, Velocidad (Haste) y Stonks**.
+   - **Arquitectura de Cero Impacto en FPS:** Diseñado sin `WS_EX_LAYERED` para preservar el modelo **DirectX Independent Flip / MPO** de Windows; mantiene 144Hz / G-Sync estables sin desenfoque ni vibración de cámara.
+   - Arrastrable a cualquier posición de la pantalla con guardado automático.
+   - Atajo global **F6** para alternar visibilidad en cualquier momento durante la partida.
+3. **🎯 4 Modos de Búsqueda Avanzados:**
    - **Modo 1 (Ítems):** Catálogo de los 88 ítems oficiales clasificados por rareza (Dorados, Épicos, Raros, Comunes) con búsqueda por texto en 3 idiomas. Busca hasta 3 ítems simultáneos garantizando vendedores distintos.
    - **Modo 2 (Vendedores Dorados):** Filtra partidas con 1, 2 o 3 vendedores legendarios (0.1% chance).
    - **Modo 3 (Específico):** Filtros cuantitativos exactos para Moáis, Maldiciones de Jefe, Microondas, Santuarios y Cofres.
    - **Modo 4 (Puntuación & Plantillas):** Algoritmo de scoring competitivo con rangos objetivos (*Perfect+*, *Perfect*, *Good*, *Light*) y presets rápidos (*Record Mundial*, *Lluvia de Moáis*, *2x Microondas*, etc.), combinable con ítems y dorados.
-3. **⏸️ Pausa de Seguridad AFK Automática:**
+4. **⏸️ Pausa de Seguridad AFK Automática:**
    - Al encontrar la semilla objetivo, el bot envía automáticamente la señal de pausa (`Esc`) para proteger al jugador de enemigos mientras esté ausente.
-4. **⚡ Atajo Global de Baja Latencia (`F5`):**
+5. **⚡ Atajos Globales de Baja Latencia (`F5` y `F6`):**
    - Sondeo asíncrono nativo (`GetAsyncKeyState`) que responde en menos de 20ms incluso con el juego en pantalla completa DirectX sin requerir Alt+Tab.
-5. **🩺 Watchdog de Salud y Degradación de Memoria:**
+6. **🩺 Watchdog de Salud y Degradación de Memoria:**
    - Detecta si las recargas del motor se ralentizan tras partidas largas y avisa al usuario para reiniciar el juego y recuperar máxima velocidad.
 
 ---
@@ -74,9 +80,10 @@
 ## 🎮 Cómo Usar / How to Use
 1. Abre **Steam** e inicia el juego.
 2. Abre **MB Helper**. El estado indicará `● En Menu` o `● En Partida`.
-3. Selecciona tu Modo objetivo (1, 2, 3 o 4) y configura tus requisitos.
-4. Entra a una partida y pulsa **F5** (o haz clic en `▶ INICIAR BÚSQUEDA`).
-5. El bot reiniciará rápidamente hasta encontrar la semilla ganadora y pausará el juego automáticamente.
+3. **Contador de Powerups:** Pulsa **F6** para mostrar u ocultar el HUD flotante en cualquier momento. Arrástralo con el ratón a tu posición preferida.
+4. **Buscador de Semillas:** Selecciona tu Modo objetivo (1, 2, 3 o 4) y configura tus requisitos.
+5. Entra a una partida y pulsa **F5** (o haz clic en `▶ INICIAR BÚSQUEDA`).
+6. El bot reiniciará rápidamente hasta encontrar la semilla ganadora y pausará el juego automáticamente.
 
 ---
 
@@ -85,6 +92,7 @@
 ```text
 ├── assets/
 │   └── item_icons/        # 88 Iconos oficiales de ítems
+├── powerup_overlay.py     # HUD flotante nativo DirectX/DWM de cuenta regresiva (F6)
 ├── phantom_reader.py      # Lector de memoria pasivo con catálogo de 88 ítems (ES, EN, PT)
 ├── phantom_bot.py         # Módulo de reinicio ('R') y pausa AFK ('Esc') nativos
 ├── telemetry_logger.py    # Recolector de telemetría pasivo para análisis
