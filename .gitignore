@@ -17,6 +17,8 @@ megabonk_helper.log
 telemetry.db
 *.db
 *.sqlite3
+*.csv
+overlay_position.json
 
 # Scratch & Temporary Analysis
 scratch/

@@ -106,6 +106,7 @@ except Exception:
 RVA_GAME_MANAGER_TYPEINFO = 0x2f9c1c0
 RVA_INTERACTABLES_STATUS_TYPEINFO = 0x2fb5e68
 RVA_SHADY_GUY_TYPEINFO = 0x2fb5928
+RVA_MICROWAVE_TYPEINFO = 0x2fb5730
 RVA_MAP_GENERATION_CONTROLLER_TYPEINFO = 0x2f59000
 RVA_MAP_CONTROLLER_TYPEINFO = 0x2f58e08
 RVA_LOADING_SCREEN_TYPEINFO = 0x2f55e20
@@ -131,6 +132,27 @@ PLAYER_STATS_XP_LEVEL_OFFSET = 0x14
 PLAYER_STATS_GOLD_OFFSET = 0x70
 PLAYER_STATS_INVENTORY_CONTAINER_OFFSET = 0xA0
 PLAYER_STATS_PASSIVE_DICT_OFFSET = 0x50
+
+# Offsets de Status Effects y Powerups (Clock, Shield, Rage, Haste, Stonks)
+PLAYER_CONTROLLER_OFFSET = 0x90
+PLAYER_STATUS_EFFECTS_OFFSET = 0x38
+STATUS_EFFECTS_DICT_OFFSET = 0x10
+MY_TIME_CURRENT_TIME_OFFSET = 0x04
+STATUS_EFFECT_ID_OFFSET = 0x10
+STATUS_EFFECT_END_TIME_OFFSET = 0x20
+STATUS_EFFECT_START_TIME_OFFSET = 0x24
+
+OFFICIAL_POWERUPS = {
+    1: {"name": "Furia", "fullname": "Furia de Ataque", "codename": "Rage", "icon": "⚡", "color": "#FF1744"},
+    2: {"name": "Escudo", "fullname": "Escudo de Protección", "codename": "Shield", "icon": "🛡️", "color": "#76FF03"},
+    3: {"name": "Stonks", "fullname": "Stonks (Multiplicador de Oro)", "codename": "Stonks", "icon": "💰", "color": "#FFD700"},
+    4: {"name": "Reloj", "fullname": "Reloj del Tiempo", "codename": "Clock", "icon": "⏳", "color": "#00E5FF"},
+    # Retrocompatibilidad para otros índices
+    5: {"name": "Escudo", "fullname": "Escudo de Protección", "codename": "Shield", "icon": "🛡️", "color": "#76FF03"},
+    6: {"name": "Furia", "fullname": "Furia de Ataque", "codename": "Rage", "icon": "⚡", "color": "#FF1744"},
+    7: {"name": "Velocidad", "fullname": "Super Velocidad", "codename": "Haste", "icon": "🏃", "color": "#FFEA00"},
+    8: {"name": "Stonks", "fullname": "Stonks (Multiplicador de Oro)", "codename": "Stonks", "icon": "💰", "color": "#FFD700"}
+}
 
 # 27 Especificaciones oficiales de Estadísticas de Combate y Progresión
 # Formato: (stat_id, clave_interna, formato, escala_visual_o_mult)
@@ -182,6 +204,9 @@ CLASS_METADATA_OFFSETS = {
     "MyPlayer": 0x18848c,
     "PlayerMovement": 0x1629e2,
     "GameManager": 0x1629a6,
+    "MyTime": 0x17be26,
+    "PlayerStatusEffects": 0x182c26,
+    "TimeFreezeUi": 0x167a37,
 }
 
 # Offsets de Jerarquia Unity IL2CPP (Read-Only)
@@ -328,11 +353,17 @@ class PhantomMemoryReader:
         self.ga_size = None
         self._cached_classes = {}
         self._cached_vendor_regions = []
+        self._cached_microwave_regions = []
         self._cached_heap_regions = []
         self._cached_metadata_base = None
         self._last_metadata_scan_time = 0.0
         self._last_vendor_heap_sweep_time = 0.0
+        self._last_microwave_heap_sweep_time = 0.0
         self._dict_key_cache = {}
+        self._cached_powerup_dict = None
+        self._cached_time_static = None
+        self._cached_time_offset = MY_TIME_CURRENT_TIME_OFFSET
+        self._last_match_time = 0.0
         self._mem_lock = threading.RLock()
 
     def find_process(self):
@@ -424,9 +455,13 @@ class PhantomMemoryReader:
         self.ga_size = None
         self._cached_classes.clear()
         self._cached_vendor_regions.clear()
+        self._cached_microwave_regions.clear()
         self._cached_heap_regions.clear()
         self._dict_key_cache.clear()
         self._cached_metadata_base = None
+        self._cached_powerup_dict = None
+        self._cached_time_static = None
+        self._last_match_time = 0.0
 
 
     def read_bytes(self, address, size):
@@ -596,12 +631,14 @@ class PhantomMemoryReader:
                 return None
 
             now = time.time()
-            if now - self._last_metadata_scan_time < 3.0:
+            if now - self._last_metadata_scan_time < 0.5:
                 return None
             self._last_metadata_scan_time = now
 
             mbi = MEMORY_BASIC_INFORMATION64()
             address = 0
+
+            valid_protects = (PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE)
 
             while kernel32.VirtualQueryEx(
                 self.handle,
@@ -613,13 +650,20 @@ class PhantomMemoryReader:
                 size = mbi.RegionSize
 
                 if (mbi.State == MEM_COMMIT and
-                    (mbi.Protect & 0xFF) in (PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY) and
+                    (mbi.Protect & 0xFF) in valid_protects and
                     0x100000 <= size < 0x20000000):
 
                     head = self.read_bytes(base_addr, 8)
                     if head == METADATA_MAGIC:
                         self._cached_metadata_base = base_addr
                         return base_addr
+                    elif 0x800000 <= size <= 0x2000000:
+                        chunk = self.read_bytes(base_addr, min(size, 0x100000))
+                        if chunk:
+                            idx = chunk.find(METADATA_MAGIC)
+                            if idx != -1:
+                                self._cached_metadata_base = base_addr + idx
+                                return self._cached_metadata_base
 
                 address = base_addr + size
                 if address >= 0x7FFFFFFFFFFF:
@@ -628,90 +672,76 @@ class PhantomMemoryReader:
             return None
 
     def resolve_class_ptr(self, class_name):
-        """Resuelve de forma inmediata el puntero Il2CppClass* usando la base de metadata"""
+        """Resuelve de forma inmediata el puntero Il2CppClass* usando las instancias en heap o metadata"""
         if class_name in self._cached_classes:
             cached = self._cached_classes[class_name]
-            if cached:
+            if cached and cached > 0xFFFFFFFF:
                 name_ptr = self.read_ptr(cached + 0x10)
                 if name_ptr and self.read_ascii_string(name_ptr, len(class_name) + 1) == class_name:
                     return cached
-            del self._cached_classes[class_name]
+            self._cached_classes.pop(class_name, None)
 
-        if not self.ga_base or not self.handle:
+        if not self.handle:
             return None
 
+        # 1. Búsqueda directa ultrarrápida sobre instancias vivas en el heap (< 2ms)
+        # En Unity IL2CPP, cada objeto instanciado contiene su puntero Il2CppClass* en offset 0x00.
+        # Leyendo class->name (offset 0x10), encontramos la clase al instante sin heurísticas frágiles.
+        heap_regions = self.refresh_cached_heap_regions()
+        seen_cand = set()
+        cname_len = len(class_name)
+        for base_addr, size in heap_regions:
+            scan_len = min(size, 0x400000)
+            data = self.read_bytes(base_addr, scan_len)
+            if not data or len(data) < 16:
+                continue
+            num_qwords = len(data) // 8
+            qwords = struct.unpack(f'<{num_qwords}Q', data[:num_qwords*8])
+            for ptr in qwords:
+                if ptr > 0xFFFFFFFF and ptr not in seen_cand:
+                    seen_cand.add(ptr)
+                    n_ptr = self.read_ptr(ptr + 0x10)
+                    if n_ptr and n_ptr > 0x10000:
+                        s = self.read_ascii_string(n_ptr, cname_len + 1)
+                        if s == class_name:
+                            self._cached_classes[class_name] = ptr
+                            return ptr
+
+        # 2. Fallback de metadata si aún no hay instancias en el mapa
         meta_base = self.find_metadata_base()
         target_str_addr = None
         if meta_base and class_name in CLASS_METADATA_OFFSETS:
             target_str_addr = meta_base + CLASS_METADATA_OFFSETS[class_name]
 
-        target_ptr_bytes = struct.pack('<Q', target_str_addr) if target_str_addr else None
-        if not target_ptr_bytes:
-            return None
-
-        # Escanear ÚNICAMENTE las regiones de heap privado de Unity (64KB - 64MB)
-        # NUNCA hacer un recorrido lineal de 128 Terabytes (0 a 0x7FFFFFFFFFFF)
-        heap_regions = self.refresh_cached_heap_regions()
-        for base_addr, size in heap_regions:
-            data = self.read_bytes(base_addr, size)
-            if not data:
-                continue
-            pos = 0
-            while True:
-                p_idx = data.find(target_ptr_bytes, pos)
-                if p_idx == -1:
+        if not target_str_addr:
+            target_str_bytes = class_name.encode('ascii') + b'\x00'
+            for base_addr, size in heap_regions:
+                data = self.read_bytes(base_addr, size)
+                if not data:
+                    continue
+                s_idx = data.find(target_str_bytes)
+                if s_idx != -1:
+                    target_str_addr = base_addr + s_idx
                     break
-                cand_class = base_addr + p_idx - 0x10
-                if cand_class > 0x10000:
-                    if self.read_ptr(cand_class + 0x10) == target_str_addr:
-                        self._cached_classes[class_name] = cand_class
-                        return cand_class
-                pos = p_idx + 8
+
+        if target_str_addr:
+            target_ptr_bytes = struct.pack('<Q', target_str_addr)
+            if self.ga_base:
+                ga_data = self.read_bytes(self.ga_base + 0x2000000, 0x1500000)
+                if ga_data:
+                    pos = 0
+                    while True:
+                        p_idx = ga_data.find(target_ptr_bytes, pos)
+                        if p_idx == -1:
+                            break
+                        cand_class = self.ga_base + 0x2000000 + p_idx - 0x10
+                        if cand_class > 0xFFFFFFFF:
+                            if self.read_ptr(cand_class + 0x10) == target_str_addr:
+                                self._cached_classes[class_name] = cand_class
+                                return cand_class
+                        pos = p_idx + 8
 
         return None
-
-    def resolve_classes_batch(self, class_names):
-        """
-        Resuelve un lote completo de clases Il2CppClass* en una ÚNICA pasada sobre el heap (< 10ms).
-        Evita cualquier barrido de 128TB o consultas redundantes de memoria.
-        """
-        needed = {}
-        meta_base = self.find_metadata_base()
-        for cname in class_names:
-            if cname in self._cached_classes:
-                continue
-            if meta_base and cname in CLASS_METADATA_OFFSETS:
-                target_str_addr = meta_base + CLASS_METADATA_OFFSETS[cname]
-                target_bytes = struct.pack('<Q', target_str_addr)
-                needed[target_bytes] = (cname, target_str_addr)
-
-        if not needed:
-            return {cname: self._cached_classes.get(cname) for cname in class_names}
-
-        heap_regions = self.refresh_cached_heap_regions()
-        for base_addr, size in heap_regions:
-            data = self.read_bytes(base_addr, size)
-            if not data:
-                continue
-
-            for target_bytes, (cname, target_str_addr) in list(needed.items()):
-                pos = 0
-                while True:
-                    p_idx = data.find(target_bytes, pos)
-                    if p_idx == -1:
-                        break
-                    cand_class = base_addr + p_idx - 0x10
-                    if cand_class > 0x10000:
-                        if self.read_ptr(cand_class + 0x10) == target_str_addr:
-                            self._cached_classes[cname] = cand_class
-                            del needed[target_bytes]
-                            break
-                    pos = p_idx + 8
-
-            if not needed:
-                break
-
-        return {cname: self._cached_classes.get(cname) for cname in class_names}
 
     def get_map_generation_state(self):
         """
@@ -934,7 +964,7 @@ class PhantomMemoryReader:
                 if (mbi.State == MEM_COMMIT and
                     getattr(mbi, 'Type', 0) == 0x20000 and  # MEM_PRIVATE
                     (mbi.Protect & 0xFF) in (PAGE_READWRITE, PAGE_EXECUTE_READWRITE) and
-                    0x10000 <= size <= 0x4000000):
+                    0x10000 <= size <= 0x20000000):
                     new_heap_regions.append((base_addr, size))
 
                 address = base_addr + size
@@ -955,16 +985,47 @@ class PhantomMemoryReader:
             return vendors
 
         class_shady = self._cached_classes.get("InteractableShadyGuy")
+        if class_shady:
+            name_ptr = self.read_ptr(class_shady + 0x10)
+            if not (name_ptr and self.read_ascii_string(name_ptr, 20) == "InteractableShadyGuy"):
+                class_shady = None
+                self._cached_classes.pop("InteractableShadyGuy", None)
+
         if not class_shady:
             typeinfo_ptr = self.read_ptr(self.ga_base + RVA_SHADY_GUY_TYPEINFO)
-            if typeinfo_ptr and typeinfo_ptr > 0x10000:
-                # Comprobar si typeinfo_ptr es un token no inicializado (0x2000xxxx)
-                if not (typeinfo_ptr <= 0xFFFFFFFF and (typeinfo_ptr & 0xE0000000) == 0x20000000):
+            # Un puntero Il2CppClass* en Windows x64 SIEMPRE es > 0xFFFFFFFF (64 bits)
+            # Cualquier valor <= 0xFFFFFFFF es un metadata token sin inicializar
+            if typeinfo_ptr and typeinfo_ptr > 0xFFFFFFFF:
+                name_ptr = self.read_ptr(typeinfo_ptr + 0x10)
+                if name_ptr and self.read_ascii_string(name_ptr, 20) == "InteractableShadyGuy":
                     class_shady = typeinfo_ptr
                     self._cached_classes["InteractableShadyGuy"] = class_shady
 
         if not class_shady:
             class_shady = self.resolve_class_ptr("InteractableShadyGuy")
+
+        # Fallback definitivo: si class_shady aún no se resolvió, buscar directamente en heap (< 2ms)
+        if not class_shady:
+            heap_regions = self.refresh_cached_heap_regions()
+            seen_cand = set()
+            for base_addr, size in heap_regions:
+                scan_len = min(size, 0x400000)
+                data = self.read_bytes(base_addr, scan_len)
+                if not data or len(data) < 16:
+                    continue
+                num_qwords = len(data) // 8
+                qwords = struct.unpack(f'<{num_qwords}Q', data[:num_qwords*8])
+                for ptr in qwords:
+                    if ptr > 0xFFFFFFFF and ptr not in seen_cand:
+                        seen_cand.add(ptr)
+                        n_ptr = self.read_ptr(ptr + 0x10)
+                        if n_ptr and n_ptr > 0x10000:
+                            if self.read_ascii_string(n_ptr, 21) == "InteractableShadyGuy":
+                                class_shady = ptr
+                                self._cached_classes["InteractableShadyGuy"] = class_shady
+                                break
+                if class_shady:
+                    break
 
         if not class_shady:
             # Si Unity aún no instanció Shady Guy en este mapa, retornar de inmediato (< 0.01ms)
@@ -973,7 +1034,7 @@ class PhantomMemoryReader:
         target_bytes = struct.pack('<Q', class_shady)
         target_count = max(1, min(expected_count or 3, 3))
         candidate_instances = []
-        candidate_meta = {}  # inst_addr -> (rarity, items_ptr, arr_ptr, arr_len)
+        candidate_meta = {}  # inst_addr -> (rarity, items_ptr, arr_ptr, arr_len, done)
 
         # 1. Escaneo ultrarrápido sobre regiones cacheadas (< 0.1ms) con vectorizado C (data.find)
         if self._cached_vendor_regions and not force_rescan:
@@ -986,6 +1047,11 @@ class PhantomMemoryReader:
                         if idx == -1:
                             break
                         inst_addr = base_addr + idx
+                        # Descartar vendedor si ya fue marcado como completado o inactivo
+                        done = self.read_u8(inst_addr + 0xB0)
+                        if done != 0:
+                            pos = idx + 8
+                            continue
                         native_comp = self.read_ptr(inst_addr + MANAGED_NATIVE_OFFSET)
                         if native_comp and native_comp > 0x10000:
                             rarity = self.read_int32(inst_addr + 0x90)
@@ -994,33 +1060,39 @@ class PhantomMemoryReader:
                                     items_ptr = self.read_ptr(inst_addr + 0x98)
                                     arr_ptr, arr_len = 0, 0
                                     if items_ptr and items_ptr > 0x10000:
-                                        arr_ptr = self.read_ptr(items_ptr + 0x10)
+                                        arr_ptr = self.read_ptr(items_ptr + 0x10) or 0
                                         arr_len = self.read_int32(items_ptr + 0x18) or 0
                                     candidate_instances.append(inst_addr)
-                                    candidate_meta[inst_addr] = (rarity, items_ptr, arr_ptr, arr_len)
+                                    candidate_meta[inst_addr] = (rarity, items_ptr, arr_ptr, arr_len, done)
                         pos = idx + 8
 
-        # 2. Si la caché no tiene suficientes instancias (arranque en frío / cambio de región / force_rescan):
+        # 2. Si la caché no tiene suficientes instancias con items listos (o arranque en frío / force_rescan):
         now = time.time()
+        valid_ready = sum(1 for a in candidate_instances if candidate_meta[a][3] > 0)
         should_sweep_heap = (
-            (len(candidate_instances) < target_count or force_rescan)
-            and (force_rescan or (now - self._last_vendor_heap_sweep_time >= 0.20))
+            (valid_ready < target_count or force_rescan)
+            and (force_rescan or (now - self._last_vendor_heap_sweep_time >= 0.10))
         )
         if should_sweep_heap:
             self._last_vendor_heap_sweep_time = now
             heap_regions = self.refresh_cached_heap_regions(force=force_rescan)
             new_vendor_regions = []
-            for base_addr, size in heap_regions:
+            # Barrer de direcciones altas a bajas (objetos más recientes instanciados en el mapa actual)
+            for base_addr, size in reversed(heap_regions):
                 data = self.read_bytes(base_addr, size)
                 if not data:
                     continue
-                region_has_instance = False
+                region_has_vendor = False
                 pos = 0
                 while True:
                     idx = data.find(target_bytes, pos)
                     if idx == -1:
                         break
                     inst_addr = base_addr + idx
+                    done = self.read_u8(inst_addr + 0xB0)
+                    if done != 0:
+                        pos = idx + 8
+                        continue
                     native_comp = self.read_ptr(inst_addr + MANAGED_NATIVE_OFFSET)
                     if native_comp and native_comp > 0x10000:
                         rarity = self.read_int32(inst_addr + 0x90)
@@ -1029,17 +1101,19 @@ class PhantomMemoryReader:
                                 items_ptr = self.read_ptr(inst_addr + 0x98)
                                 arr_ptr, arr_len = 0, 0
                                 if items_ptr and items_ptr > 0x10000:
-                                    arr_ptr = self.read_ptr(items_ptr + 0x10)
+                                    arr_ptr = self.read_ptr(items_ptr + 0x10) or 0
                                     arr_len = self.read_int32(items_ptr + 0x18) or 0
                                 candidate_instances.append(inst_addr)
-                                candidate_meta[inst_addr] = (rarity, items_ptr, arr_ptr, arr_len)
-                            region_has_instance = True
+                                candidate_meta[inst_addr] = (rarity, items_ptr, arr_ptr, arr_len, done)
+                            region_has_vendor = True
                     pos = idx + 8
 
-                if region_has_instance and (base_addr, size) not in new_vendor_regions:
+                if region_has_vendor and (base_addr, size) not in new_vendor_regions:
                     new_vendor_regions.append((base_addr, size))
 
-                if len(candidate_instances) >= target_count:
+                # Romper si ya encontramos suficientes vendedores con items listos
+                ready_count = sum(1 for a in candidate_instances if candidate_meta[a][3] > 0)
+                if ready_count >= target_count:
                     break
 
             if new_vendor_regions:
@@ -1067,6 +1141,7 @@ class PhantomMemoryReader:
 
             item_ids = []
             item_names = []
+            item_prices = []
 
             # Compatibilidad dual: si arr_ptr > 0x10000 es List<ItemData>; de lo contrario es ItemData[] directo
             base_item_arr = arr_ptr if (arr_ptr and arr_ptr > 0x10000) else items_ptr
@@ -1091,6 +1166,19 @@ class PhantomMemoryReader:
                             item_ids.append(e_item)
                             item_names.append(f"Item #{e_item}")
 
+                # Extraer precios de los objetos (offset +0xA0: List<int> o int[])
+                prices_ptr = self.read_ptr(inst_addr + 0xA0)
+                if prices_ptr and prices_ptr > 0x10000:
+                    p_arr_ptr = self.read_ptr(prices_ptr + 0x10)
+                    p_base = p_arr_ptr if (p_arr_ptr and p_arr_ptr > 0x10000) else prices_ptr
+                    if p_base and p_base > 0x10000:
+                        for item_idx in range(len(item_ids)):
+                            p_val = self.read_int32(p_base + 0x20 + (item_idx * 4))
+                            item_prices.append(max(0, p_val) if p_val is not None else 0)
+
+            while len(item_prices) < len(item_ids):
+                item_prices.append(0)
+
             vendors.append({
                 "address": hex(inst_addr),
                 "ptr": inst_addr,
@@ -1098,103 +1186,194 @@ class PhantomMemoryReader:
                 "rarity_name": RARITY_NAMES_ES.get(rarity, "Desconocido"),
                 "is_golden": (rarity == 3),
                 "item_ids": item_ids,
-                "item_names": item_names
+                "item_names": item_names,
+                "item_prices": item_prices,
+                "done": candidate_meta[inst_addr][4] if len(candidate_meta[inst_addr]) > 4 else 0
             })
 
         return vendors
 
-    def scan_map_landmarks(self, existing_vendors=None, existing_stats=None):
+    def scan_microwaves(self, expected_count=2, force_rescan=False):
         """
-        Extracción ONE-SHOT de coordenadas en el mundo 3D (X, Y, Z) de todos los interactuables
-        clave del mapa: Moáis, Vendedores (con rareza e items), Maldiciones de Jefe,
-        Santuarios de Mejora (Carga, Codicia, Imán), Desafíos y Microondas.
-        Se ejecuta una sola vez al encontrar la partida definitiva (0% impacto en rerolls).
+        Escanea la memoria para encontrar instancias activas de InteractableMicrowave y su rareza real.
+        Rarity: 0=Blanco (Comun), 1=Azul (Raro), 2=Morado (Epico), 3=Dorado (Legendario).
+        Valida rigurosamente que la instancia sea un objeto vivo del mapa actual y no un prefab ni objeto muerto:
+          - native_comp > 0x10000 y meshRenderer (offset 0x78) > 0x10000.
+          - rarity in (0, 1, 2, 3).
+          - usesLeft in (1, 2, 3) (En Start(): Blanco=3, Azul=2, Morado=2, Dorado=1. Prefabs y objetos muertos tienen 0).
+          - Coordenadas 3D válidas en el mundo (get_world_position != (0,0,0)).
+        Retorna lista de dicts: [{'address': hex, 'ptr': int, 'rarity': int, 'rarity_name': str, 'is_white': bool, 'uses_left': int, 'x': float, 'z': float, 'has_coords': bool}]
         """
-        landmarks = []
-        if not self.handle or not self.ga_base:
-            return landmarks
+        microwaves = []
+        if not self.ga_base:
+            return microwaves
 
-        with self._mem_lock:
-            # 1. Reutilizar vendedores ya leídos o escanearlos
-            vendors = existing_vendors if existing_vendors is not None else self.scan_shady_vendors()
-            stats = existing_stats if existing_stats is not None else self.read_interactables_status()
+        class_micro = self._cached_classes.get("InteractableMicrowave")
+        if class_micro:
+            name_ptr = self.read_ptr(class_micro + 0x10)
+            if not (name_ptr and self.read_ascii_string(name_ptr, 21) == "InteractableMicrowave"):
+                class_micro = None
+                self._cached_classes.pop("InteractableMicrowave", None)
 
-            seen_positions = []
-            seen_instances = set()
+        if not class_micro:
+            typeinfo_ptr = self.read_ptr(self.ga_base + RVA_MICROWAVE_TYPEINFO)
+            # Un puntero Il2CppClass* en Windows x64 SIEMPRE es > 0xFFFFFFFF (64 bits)
+            # Cualquier valor <= 0xFFFFFFFF es un metadata token sin inicializar (ej: 0xc0038287)
+            if typeinfo_ptr and typeinfo_ptr > 0xFFFFFFFF:
+                name_ptr = self.read_ptr(typeinfo_ptr + 0x10)
+                if name_ptr and self.read_ascii_string(name_ptr, 21) == "InteractableMicrowave":
+                    class_micro = typeinfo_ptr
+                    self._cached_classes["InteractableMicrowave"] = class_micro
 
-            # 2. Registrar vendedores conocidos con su posición 3D exacta
-            for idx, v in enumerate(vendors):
-                rarity = v.get("rarity", 0)
-                r_name = v.get("rarity_name", "Comun")
-                is_gold = v.get("is_golden", False)
-                items = v.get("item_names", [])
+        if not class_micro:
+            class_micro = self.resolve_class_ptr("InteractableMicrowave")
 
-                if is_gold:
-                    label = f"👑 Vendedor #{idx+1} (Dorado)"
-                    color = "#F59E0B"
-                    icon = "👑"
-                elif rarity == 2:
-                    label = f"🛒 Vendedor #{idx+1} (Épico)"
-                    color = "#A855F7"
-                    icon = "🛒"
-                elif rarity == 1:
-                    label = f"🛒 Vendedor #{idx+1} (Raro)"
-                    color = "#3B82F6"
-                    icon = "🛒"
-                else:
-                    label = f"🛒 Vendedor #{idx+1} (Común)"
-                    color = "#94A3B8"
-                    icon = "🛒"
+        # Fallback definitivo: si class_micro aún no se resolvió, buscar directamente en heap (< 2ms)
+        if not class_micro:
+            heap_regions = self.refresh_cached_heap_regions()
+            seen_cand = set()
+            for base_addr, size in heap_regions:
+                scan_len = min(size, 0x400000)
+                data = self.read_bytes(base_addr, scan_len)
+                if not data or len(data) < 16:
+                    continue
+                num_qwords = len(data) // 8
+                qwords = struct.unpack(f'<{num_qwords}Q', data[:num_qwords*8])
+                for ptr in qwords:
+                    if ptr > 0xFFFFFFFF and ptr not in seen_cand:
+                        seen_cand.add(ptr)
+                        n_ptr = self.read_ptr(ptr + 0x10)
+                        if n_ptr and n_ptr > 0x10000:
+                            if self.read_ascii_string(n_ptr, 22) == "InteractableMicrowave":
+                                class_micro = ptr
+                                self._cached_classes["InteractableMicrowave"] = class_micro
+                                break
+                if class_micro:
+                    break
 
-                inst_addr = v.get("ptr", 0)
-                x, y, z = None, None, None
-                if inst_addr:
-                    seen_instances.add(inst_addr)
-                    try:
-                        w_pos = self.get_world_position(inst_addr)
-                        if w_pos and (abs(w_pos[0]) > 0.5 or abs(w_pos[2]) > 0.5):
-                            x, y, z = round(w_pos[0], 1), round(w_pos[1], 1), round(w_pos[2], 1)
-                            seen_positions.append((x, z))
-                    except Exception:
-                        pass
+        if not class_micro:
+            return microwaves
 
-                landmarks.append({
-                    "type": "shady",
-                    "label": label,
-                    "color": color,
-                    "icon": icon,
-                    "x": x,
-                    "y": y,
-                    "z": z,
-                    "has_coords": (x is not None and z is not None),
-                    "rarity": rarity,
-                    "rarity_name": r_name,
-                    "is_golden": is_gold,
-                    "items": items
-                })
+        target_bytes = struct.pack('<Q', class_micro)
+        target_count = max(1, min(expected_count or 2, 4))
+        candidate_instances = []
+        seen_ptrs = set()
+        seen_coords = set()
 
-            return landmarks
+        def _evaluate_candidate(inst_addr):
+            # 1. Native Component
+            native_comp = self.read_ptr(inst_addr + MANAGED_NATIVE_OFFSET)
+            if not native_comp or native_comp <= 0x10000:
+                return None
 
-    def activity_is_active(self, object_ptr, class_name):
-        """Verifica si el interactuable sigue activo en el juego (metodo BonkScanner)."""
-        if not object_ptr or not self.handle:
-            return False
-        try:
-            if class_name == "InteractableMicrowave":
-                uses_left = self.read_int32(object_ptr + 0x84) or 0
-                is_cooking = bool(self.read_u8(object_ptr + 0x88))
-                has_item = bool(self.read_u8(object_ptr + 0xF4))
-                return uses_left > 0 or is_cooking or has_item
-            elif class_name == "InteractableShadyGuy":
-                return not bool(self.read_u8(object_ptr + 0xB0))
-            elif class_name == "InteractableEgg":
-                return not bool(self.read_u8(object_ptr + 0xA0))
-            elif class_name == "InteractableCharacterFight":
-                return not bool(self.read_u8(object_ptr + 0x68))
-            else:
-                return not bool(self.read_u8(object_ptr + 0x68))
-        except Exception:
-            return True
+            # 2. Rarity (EItemRarity: 0=Common/Blanco, 1=Rare/Azul, 2=Epic/Morado, 3=Legendary/Dorado)
+            rarity = self.read_int32(inst_addr + 0x80)
+            if rarity is None or rarity not in (0, 1, 2, 3):
+                return None
+
+            # 3. usesLeft (En Start(): Blanco=3, Azul=2, Morado=2, Dorado=1. Prefabs y objetos destruidos tienen 0)
+            uses_left = self.read_int32(inst_addr + 0x84)
+            if uses_left is None or uses_left <= 0 or uses_left > 3:
+                return None
+
+            # 4. MeshRenderer component (offset 0x78 en InteractableMicrowave)
+            mesh_renderer = self.read_ptr(inst_addr + 0x78)
+            if not mesh_renderer or mesh_renderer <= 0x10000:
+                return None
+
+            # 5. Coordenadas en el mundo 3D (Descarta prefabs fuera de escena y transforms destruidos)
+            x, y, z = None, None, None
+            has_coords = False
+            try:
+                w_pos = self.get_world_position(inst_addr)
+                if w_pos and (abs(w_pos[0]) > 0.5 or abs(w_pos[2]) > 0.5):
+                    x, y, z = round(w_pos[0], 1), round(w_pos[1], 1), round(w_pos[2], 1)
+                    has_coords = True
+            except Exception:
+                pass
+
+            r_name = "Blanco" if rarity == 0 else RARITY_NAMES_ES.get(rarity, "Desconocido")
+            return {
+                'address': hex(inst_addr),
+                'ptr': inst_addr,
+                'rarity': rarity,
+                'rarity_name': r_name,
+                'is_white': (rarity == 0),
+                'uses_left': uses_left,
+                'x': x,
+                'y': y,
+                'z': z,
+                'has_coords': has_coords
+            }
+
+        # 1. Escaneo ultrarrápido sobre regiones cacheadas (< 0.1ms) si ya tienen instancias validadas
+        if self._cached_microwave_regions and not force_rescan:
+            for base_addr, size in list(self._cached_microwave_regions):
+                data = self.read_bytes(base_addr, size)
+                if data:
+                    pos = 0
+                    while True:
+                        idx = data.find(target_bytes, pos)
+                        if idx == -1:
+                            break
+                        inst_addr = base_addr + idx
+                        if inst_addr not in seen_ptrs:
+                            seen_ptrs.add(inst_addr)
+                            cand = _evaluate_candidate(inst_addr)
+                            if cand:
+                                coord_key = (cand['x'], cand['z']) if cand['has_coords'] else None
+                                if coord_key is None or coord_key not in seen_coords:
+                                    if coord_key:
+                                        seen_coords.add(coord_key)
+                                    candidate_instances.append(cand)
+                        pos = idx + 8
+                        if len(candidate_instances) >= target_count:
+                            break
+                    if len(candidate_instances) >= target_count:
+                        break
+
+        # 2. Si la caché no tiene suficientes instancias vivas: barrido en regiones heap (de mayor a menor dirección)
+        if len(candidate_instances) < target_count or force_rescan:
+            heap_regions = self.refresh_cached_heap_regions(force=force_rescan)
+            new_microwave_regions = []
+
+            # Barrer de direcciones altas a bajas (objetos más recientes instanciados en el mapa actual)
+            for base_addr, size in reversed(heap_regions):
+                data = self.read_bytes(base_addr, size)
+                if not data:
+                    continue
+                region_has_live_instance = False
+                pos = 0
+                while True:
+                    idx = data.find(target_bytes, pos)
+                    if idx == -1:
+                        break
+                    inst_addr = base_addr + idx
+                    if inst_addr not in seen_ptrs:
+                        seen_ptrs.add(inst_addr)
+                        cand = _evaluate_candidate(inst_addr)
+                        if cand:
+                            coord_key = (cand['x'], cand['z']) if cand['has_coords'] else None
+                            if coord_key is None or coord_key not in seen_coords:
+                                if coord_key:
+                                    seen_coords.add(coord_key)
+                                candidate_instances.append(cand)
+                                region_has_live_instance = True
+                    pos = idx + 8
+
+                if region_has_live_instance and (base_addr, size) not in new_microwave_regions:
+                    new_microwave_regions.append((base_addr, size))
+
+                # Si ya alcanzamos las instancias requeridas con coordenadas verificadas en el mundo 3D
+                if len(candidate_instances) >= target_count and all(c['has_coords'] for c in candidate_instances[:target_count]):
+                    break
+
+            if new_microwave_regions:
+                self._cached_microwave_regions = new_microwave_regions
+
+        # Priorizar instancias vivas con coordenadas físicas 3D verificadas y más recientes
+        candidate_instances.sort(key=lambda c: (1 if c.get('has_coords') else 0, c.get('ptr', 0)), reverse=True)
+        return candidate_instances[:target_count]
 
     def read_full_player_stats(self):
         """
@@ -1388,23 +1567,180 @@ class PhantomMemoryReader:
 
         return result
 
-    def get_map_bounds(self):
-        """Devuelve los límites reales (minX, maxX, minZ, maxZ) del mapa cuadrado de Megabonk (Isla de 600m)."""
-        return {"min_x": -300.0, "max_x": 300.0, "min_z": -300.0, "max_z": 300.0}
+    def read_active_powerups(self, debug=False):
+        """
+        Lee en < 0.01ms los powerups actualmente activos (Reloj, Escudo, Furia, Velocidad, Stonks)
+        directamente del diccionario de PlayerStatusEffects en IL2CPP.
+        Resolución directa sin caché estático para evitar punteros obsoletos en memoria GC tras reinicios.
+        """
+        result = {
+            "valid": False,
+            "current_time": 0.0,
+            "has_clock": False,
+            "clock_remaining": 0.0,
+            "powerups": []
+        }
+        if debug:
+            result["debug_info"] = {}
 
-    def get_full_map_data(self, scan_landmarks=False, scan_vendors=True):
+        if not self.handle or not self.ga_base:
+            return result
+
+        with self._mem_lock:
+            try:
+                # 1. Tiempo actual de juego (MyTime RVA 0x2F62398)
+                cur_time = 0.0
+                time_class = self.read_ptr(self.ga_base + RVA_RUN_TIMER_TYPEINFO)
+                if not time_class or (time_class <= 0xFFFFFFFF and (time_class & 0xE0000000) == 0x20000000):
+                    time_class = self.resolve_class_ptr("MyTime")
+
+                if time_class and time_class > 0xFFFFFFFF:
+                    time_static = self.read_ptr(time_class + 0xB8)
+                    if time_static and time_static > 0xFFFFFFFF:
+                        for off in [MY_TIME_CURRENT_TIME_OFFSET, 0x1C, 0x20]:
+                            t_val = self.read_float(time_static + off)
+                            if t_val is not None and math.isfinite(t_val) and t_val > 0:
+                                cur_time = t_val
+                                break
+
+                result["current_time"] = round(cur_time, 2)
+
+                # 2. Localizar instancia de PlayerStatusEffects
+                player_effects = None
+
+                # Estrategia Primaria (Verificada): PlayerStats -> OwnerStats -> PlayerInventory -> PlayerStatusEffects
+                stats_class = self.read_ptr(self.ga_base + RVA_PLAYER_STATS_TYPEINFO)
+                if not stats_class or (stats_class <= 0xFFFFFFFF and (stats_class & 0xE0000000) == 0x20000000):
+                    stats_class = self.resolve_class_ptr("PlayerStats")
+
+                if stats_class and stats_class > 0xFFFFFFFF:
+                    stats_static = self.read_ptr(stats_class + 0xB8)
+                    if stats_static and stats_static > 0xFFFFFFFF:
+                        root = self.read_ptr(stats_static + PLAYER_STATS_STATIC_ROOT_OFFSET)
+                        if root and root > 0xFFFFFFFF:
+                            owner_stats = self.read_ptr(root + PLAYER_STATS_OWNER_OFFSET)
+                            if owner_stats and owner_stats > 0xFFFFFFFF:
+                                player_inv = self.read_ptr(owner_stats + PLAYER_STATS_INVENTORY_OFFSET)
+                                if player_inv and player_inv > 0xFFFFFFFF:
+                                    cand_eff = self.read_ptr(player_inv + PLAYER_STATUS_EFFECTS_OFFSET)
+                                    if cand_eff and cand_eff > 0xFFFFFFFF:
+                                        player_effects = cand_eff
+
+                # Estrategia Secundaria: MyPlayer TypeInfo -> Instance -> Controller -> PlayerStatusEffects
+                if not player_effects:
+                    player_class = self.read_ptr(self.ga_base + RVA_MY_PLAYER_TYPEINFO)
+                    if not player_class or (player_class <= 0xFFFFFFFF and (player_class & 0xE0000000) == 0x20000000):
+                        player_class = self.resolve_class_ptr("MyPlayer")
+
+                    if player_class and player_class > 0xFFFFFFFF:
+                        player_static = self.read_ptr(player_class + 0xB8)
+                        if player_static and player_static > 0xFFFFFFFF:
+                            for inst_off in [MY_PLAYER_INSTANCE_OFFSET, 0x08, 0x00]:
+                                player_inst = self.read_ptr(player_static + inst_off)
+                                if player_inst and player_inst > 0xFFFFFFFF:
+                                    for comp_off in [PLAYER_CONTROLLER_OFFSET, 0x90, 0x88]:
+                                        player_comp = self.read_ptr(player_inst + comp_off)
+                                        if player_comp and player_comp > 0xFFFFFFFF:
+                                            for eff_off in [PLAYER_STATUS_EFFECTS_OFFSET, 0x38, 0x30]:
+                                                cand_eff = self.read_ptr(player_comp + eff_off)
+                                                if cand_eff and cand_eff > 0xFFFFFFFF:
+                                                    player_effects = cand_eff
+                                                    break
+                                            if player_effects:
+                                                break
+                                    if player_effects:
+                                        break
+
+                if not player_effects:
+                    result["valid"] = True
+                    return result
+
+                # 3. Leer Diccionario de Efectos
+                dict_ptr = self.read_ptr(player_effects + STATUS_EFFECTS_DICT_OFFSET)
+                if not dict_ptr or dict_ptr <= 0xFFFFFFFF:
+                    result["valid"] = True
+                    return result
+
+                entries = self.read_ptr(dict_ptr + 0x18)
+                if not entries or entries <= 0xFFFFFFFF:
+                    result["valid"] = True
+                    return result
+
+                capacity = self.read_int32(entries + 0x18) if (entries and entries > 0xFFFFFFFF) else 0
+                count = self.read_int32(dict_ptr + 0x20)
+                num_slots = capacity if (capacity and 0 < capacity <= 64) else (count if (count and 0 < count <= 64) else 0)
+                if not num_slots:
+                    result["valid"] = True
+                    return result
+
+                raw_entries = self.read_bytes(entries + 0x20, num_slots * 24)
+                if not raw_entries or len(raw_entries) < num_slots * 24:
+                    result["valid"] = True
+                    return result
+
+                for i in range(num_slots):
+                    offset = i * 24
+                    hash_code = struct.unpack_from('<i', raw_entries, offset)[0]
+                    if hash_code < 0:
+                        continue
+                    status_id = struct.unpack_from('<i', raw_entries, offset + 8)[0]
+                    effect_ptr = struct.unpack_from('<Q', raw_entries, offset + 16)[0]
+
+                    if effect_ptr and effect_ptr > 0x10000:
+                        end_time = self.read_float(effect_ptr + STATUS_EFFECT_END_TIME_OFFSET)
+                        start_time = self.read_float(effect_ptr + STATUS_EFFECT_START_TIME_OFFSET)
+                        if end_time is not None and math.isfinite(end_time):
+                            remaining = end_time - cur_time
+                            if remaining > 0.05:
+                                total_dur = max(0.1, (end_time - start_time)) if (start_time is not None and math.isfinite(start_time) and end_time > start_time) else 10.0
+                                pct = max(0.0, min(1.0, remaining / total_dur))
+                                info = OFFICIAL_POWERUPS.get(status_id, {
+                                    "name": f"Efecto #{status_id}",
+                                    "fullname": f"Powerup #{status_id}",
+                                    "codename": f"Effect_{status_id}",
+                                    "icon": "⚡",
+                                    "color": "#00E5FF"
+                                })
+                                is_clock = (status_id == 4)
+                                if is_clock:
+                                    result["has_clock"] = True
+                                    result["clock_remaining"] = round(remaining, 2)
+
+                                result["powerups"].append({
+                                    "id": status_id,
+                                    "name": info["name"],
+                                    "fullname": info["fullname"],
+                                    "codename": info["codename"],
+                                    "icon": info["icon"],
+                                    "color": info["color"],
+                                    "remaining": round(remaining, 2),
+                                    "total": round(total_dur, 2),
+                                    "pct": pct,
+                                    "is_clock": is_clock,
+                                    "is_critical": (remaining <= 2.0),
+                                    "is_warning": (remaining <= 3.5)
+                                })
+
+                result["powerups"].sort(key=lambda p: (0 if p["is_clock"] else 1, p["remaining"]))
+                result["valid"] = True
+            except Exception as e:
+                if debug:
+                    result["debug_info"]["error"] = str(e)
+
+        return result
+
+    def get_full_map_data(self, scan_vendors=True):
         """Metodo maestro que devuelve todo el estado actual del mapa"""
         connected = self.find_process()
         if not connected:
-            return {"connected": False, "in_game": False, "stats": {}, "vendors": [], "landmarks": []}
+            return {"connected": False, "in_game": False, "stats": {}, "vendors": []}
 
         in_game = self.is_in_game()
         if not in_game:
-            return {"connected": True, "in_game": False, "stats": {}, "vendors": [], "landmarks": []}
+            return {"connected": True, "in_game": False, "stats": {}, "vendors": []}
 
         stats = self.read_interactables_status()
         vendors = self.scan_shady_vendors(expected_count=stats.get("vendors_total", 3)) if scan_vendors else []
-        landmarks = self.scan_map_landmarks(existing_vendors=vendors, existing_stats=stats) if scan_landmarks else []
 
         golden_count = sum(1 for v in vendors if v.get("is_golden", False))
         stats["vendors_golden"] = golden_count
@@ -1421,7 +1757,6 @@ class PhantomMemoryReader:
             "in_game": True,
             "stats": stats,
             "vendors": vendors,
-            "landmarks": landmarks,
             "score": score,
             "tier": tier
         }
@@ -1525,8 +1860,21 @@ PRESET_TEMPLATES = {
         "min_moais": 0,
         "min_vendors": 0,
         "min_microwaves": 2,
+        "min_white_microwaves": 0,
         "min_boss": 0,
         "desc": "Semilla legendaria para speedruns del más alto nivel competitivo."
+    },
+    "record_perfect_plus_white": {
+        "id": "record_perfect_plus_white",
+        "name": "Récord Mundial (2x Blancos)",
+        "tier": "Perfect+",
+        "min_score": 30.0,
+        "min_moais": 0,
+        "min_vendors": 0,
+        "min_microwaves": 2,
+        "min_white_microwaves": 2,
+        "min_boss": 0,
+        "desc": "Semilla legendaria con 2 Microondas Blancos para duplicar el ítem básico de XP."
     },
     "record_perfect": {
         "id": "record_perfect",
@@ -1536,6 +1884,7 @@ PRESET_TEMPLATES = {
         "min_moais": 0,
         "min_vendors": 0,
         "min_microwaves": 1,
+        "min_white_microwaves": 0,
         "min_boss": 0,
         "desc": "Equilibrio ideal de Moáis, Vendedores y Microondas para partidas ganadoras."
     },
@@ -1547,6 +1896,7 @@ PRESET_TEMPLATES = {
         "min_moais": 0,
         "min_vendors": 0,
         "min_microwaves": 0,
+        "min_white_microwaves": 0,
         "min_boss": 0,
         "desc": "Excelente calidad de mapa encontrada en solo 3 a 5 segundos de reinicio."
     },
@@ -1558,6 +1908,7 @@ PRESET_TEMPLATES = {
         "min_moais": 5,
         "min_vendors": 0,
         "min_microwaves": 0,
+        "min_white_microwaves": 0,
         "min_boss": 0,
         "desc": "Garantiza al menos 5 Moáis en la isla más un puntaje de nivel Good."
     },
@@ -1569,6 +1920,7 @@ PRESET_TEMPLATES = {
         "min_moais": 0,
         "min_vendors": 5,
         "min_microwaves": 0,
+        "min_white_microwaves": 0,
         "min_boss": 0,
         "desc": "Garantiza al menos 5 Vendedores en el mapa para compras masivas."
     },
@@ -1580,10 +1932,25 @@ PRESET_TEMPLATES = {
         "min_moais": 0,
         "min_vendors": 0,
         "min_microwaves": 2,
+        "min_white_microwaves": 0,
         "min_boss": 0,
         "min_bald_heads": 0,
         "map": "general",
         "desc": "Garantiza 2 microondas para duplicar ítems con puntaje decente."
+    },
+    "double_microwave_white": {
+        "id": "double_microwave_white",
+        "name": "2x Microondas Blancos",
+        "tier": "Light",
+        "min_score": 18.0,
+        "min_moais": 0,
+        "min_vendors": 0,
+        "min_microwaves": 2,
+        "min_white_microwaves": 2,
+        "min_boss": 0,
+        "min_bald_heads": 0,
+        "map": "general",
+        "desc": "Garantiza 2 microondas blancos para duplicar el ítem básico de XP."
     },
     "graveyard_bald_heads": {
         "id": "graveyard_bald_heads",
@@ -1593,6 +1960,7 @@ PRESET_TEMPLATES = {
         "min_moais": 0,
         "min_vendors": 0,
         "min_microwaves": 0,
+        "min_white_microwaves": 0,
         "min_boss": 0,
         "min_bald_heads": 10,
         "map": "graveyard",

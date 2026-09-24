@@ -1,5 +1,5 @@
 """
-Megabonk Helper - Controlador de Reinicios y Reconocimiento Optico (OpenCV)
+Megabonk Helper - Controlador de Reinicios y Teclado Win32 (SendInput)
 Zero Inyeccion / Zero DLLs en el directorio del juego.
 Sistema de Reinicio Rapido Nativo de Megabonk (Metodo BonkScanner - Hold 'R').
 """
@@ -9,8 +9,6 @@ from ctypes import wintypes
 import time
 import os
 import json
-import cv2
-import numpy as np
 
 try:
     import keyboard
@@ -18,40 +16,14 @@ except ImportError:
     keyboard = None
 
 user32 = ctypes.windll.user32
-gdi32 = ctypes.windll.gdi32
 kernel32 = ctypes.windll.kernel32
 
 VK_ESCAPE = 0x1B
-VK_RETURN = 0x0D
-VK_SPACE = 0x20
-VK_DOWN = 0x28
-VK_F5 = 0x74
 VK_R = 0x52
 
-INPUT_MOUSE = 0
 INPUT_KEYBOARD = 1
 KEYEVENTF_KEYUP = 0x0002
 KEYEVENTF_SCANCODE = 0x0008
-
-MOUSEEVENTF_LEFTDOWN = 0x0002
-MOUSEEVENTF_LEFTUP = 0x0004
-MOUSEEVENTF_ABSOLUTE = 0x8000
-MOUSEEVENTF_MOVE = 0x0001
-
-class BITMAPINFOHEADER(ctypes.Structure):
-    _fields_ = [
-        ('biSize', wintypes.DWORD),
-        ('biWidth', wintypes.LONG),
-        ('biHeight', wintypes.LONG),
-        ('biPlanes', wintypes.WORD),
-        ('biBitCount', wintypes.WORD),
-        ('biCompression', wintypes.DWORD),
-        ('biSizeImage', wintypes.DWORD),
-        ('biXPelsPerMeter', wintypes.LONG),
-        ('biYPelsPerMeter', wintypes.LONG),
-        ('biClrUsed', wintypes.DWORD),
-        ('biClrImportant', wintypes.DWORD)
-    ]
 
 class KEYBDINPUT(ctypes.Structure):
     _fields_ = [
@@ -92,53 +64,12 @@ class INPUT(ctypes.Structure):
         ('u', INPUT_UNION)
     ]
 
-class RECT(ctypes.Structure):
-    _fields_ = [
-        ('left', wintypes.LONG),
-        ('top', wintypes.LONG),
-        ('right', wintypes.LONG),
-        ('bottom', wintypes.LONG)
-    ]
-
-ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
-TEMPLATE_PATH = os.path.join(ASSETS_DIR, "btn_reiniciar.png")
-COORDS_CONFIG_PATH = os.path.join(ASSETS_DIR, "coords_config.json")
-
 class PhantomBot:
     def __init__(self):
         self.hwnd = None
-        os.makedirs(ASSETS_DIR, exist_ok=True)
-        self.template_img = None
-        self.calibrated_coords = None
         self._cached_reset_settings = None
         self._last_config_check_time = 0.0
         self._last_config_mtime = 0.0
-        self.load_template()
-        self.load_coords()
-
-    def load_template(self):
-        if os.path.exists(TEMPLATE_PATH):
-            try:
-                self.template_img = cv2.imread(TEMPLATE_PATH)
-            except Exception:
-                self.template_img = None
-
-    def load_coords(self):
-        if os.path.exists(COORDS_CONFIG_PATH):
-            try:
-                with open(COORDS_CONFIG_PATH, "r") as f:
-                    data = json.load(f)
-                    self.calibrated_coords = (data.get("rel_x", 0.50), data.get("rel_y", 0.515))
-            except Exception:
-                self.calibrated_coords = None
-
-    def save_coords(self, rel_x, rel_y):
-        self.calibrated_coords = (rel_x, rel_y)
-        try:
-            with open(COORDS_CONFIG_PATH, "w") as f:
-                json.dump({"rel_x": rel_x, "rel_y": rel_y}, f, indent=2)
-        except Exception:
-            pass
 
     def find_game_window(self, pid=None):
         hwnd = user32.FindWindowW(None, "Megabonk")
@@ -177,24 +108,6 @@ class PhantomBot:
 
         self.hwnd = hwnd if hwnd else None
         return self.hwnd is not None
-
-    def get_window_rect(self):
-        if not self.find_game_window():
-            return None
-        rect = RECT()
-        if user32.GetWindowRect(self.hwnd, ctypes.byref(rect)):
-            w = rect.right - rect.left
-            h = rect.bottom - rect.top
-            if w > 10 and h > 10:
-                return {
-                    "left": rect.left,
-                    "top": rect.top,
-                    "right": rect.right,
-                    "bottom": rect.bottom,
-                    "width": w,
-                    "height": h
-                }
-        return None
 
     def is_game_window_active(self, pid=None):
         """Comprueba de forma pasiva si Megabonk esta en primer plano."""

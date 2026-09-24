@@ -96,5 +96,18 @@
 
 ---
 
+## ⚖️ Descargo de Responsabilidad / Legal Disclaimer
+- **Uso no oficial / Fan Project:** MB Helper es una herramienta comunitaria independiente y de código abierto sin fines de lucro. No está afiliada, respaldada ni asociada oficialmente con los desarrolladores ni editores de Megabonk.
+- **Propiedad Intelectual:** Todos los nombres de ítems, iconos, sprites y marcas registradas de *Megabonk* pertenecen a sus respectivos creadores. Se utilizan exclusivamente bajo propósitos informativos y de referencia comunitaria (Fair Use).
+- **Lectura Pasiva y Juego Limpio:** MB Helper no modifica archivos del juego en disco, no inyecta librerías DLL ni elude medidas técnicas de protección (DRM).
+
+---
+
+## 🤝 Créditos y Agradecimientos / Credits
+- **ALuiell ([BonkScanner](https://github.com/ALuiell/BonkScanner)):** Agradecimiento especial por la investigación comunitaria de ingeniería inversa y análisis de offsets base de estructuras IL2CPP de Megabonk.
+- **Comunidad de Megabonk:** Por las sugerencias de filtros y apoyo en la validación de semillas récord.
+
+---
+
 ## 📜 Licencia / License
 Este proyecto se distribuye bajo la licencia MIT. Consulta el archivo `LICENSE` para más detalles.

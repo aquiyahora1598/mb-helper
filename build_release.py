@@ -41,6 +41,8 @@ def build_exe():
         "--hidden-import", "telemetry_logger",
         "--hidden-import", "phantom_reader",
         "--hidden-import", "phantom_bot",
+        "--hidden-import", "powerup_overlay",
+        "--hidden-import", "audit_powerups",
         "phantom_gui.py"
     ]
 
