@@ -1,0 +1,4 @@
+# Optional, isolated from the Windows HUD and memory reader.
+opencv-python-headless>=4.10,<6
+yt-dlp>=2026.8.19
+imageio-ffmpeg>=0.6,<0.7

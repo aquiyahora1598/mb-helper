@@ -1,77 +1,98 @@
-"""
-Script de Compilación Automatizada para MB Helper
-Genera el ejecutable MB_Helper.exe y empaqueta el release portable en .zip para GitHub.
-"""
+"""Build, check and package a versioned Windows portable release."""
 
+import argparse
+import hashlib
+import json
 import os
-import sys
+from pathlib import Path
+import re
 import shutil
 import subprocess
+import sys
 import zipfile
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DIST_DIR = os.path.join(BASE_DIR, "dist")
-BUILD_DIR = os.path.join(BASE_DIR, "build")
-ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 
-def build_exe():
-    print("=== [1/3] Limpiando compilaciones anteriores ===")
-    for folder in [DIST_DIR, BUILD_DIR]:
-        if os.path.exists(folder):
-            shutil.rmtree(folder, ignore_errors=True)
-            print(f"Eliminado: {folder}")
+BASE_DIR = Path(__file__).resolve().parent
+DEFAULT_VERSION = "1.1.0"
 
-    spec_file = os.path.join(BASE_DIR, "MB_Helper.spec")
-    if os.path.exists(spec_file):
-        os.remove(spec_file)
 
-    print("\n=== [2/3] Ejecutando PyInstaller para MB_Helper ===")
-    
-    # Separador de paths para --add-data en Windows es ';'
-    add_data_arg = f"{os.path.join('assets', 'item_icons')};{os.path.join('assets', 'item_icons')}"
+def build_exe(version=DEFAULT_VERSION):
+    if not re.fullmatch(r"\d{1,4}\.\d{1,4}\.\d{1,4}", version):
+        raise ValueError("Use a version such as 1.1.0")
+    dist_root = BASE_DIR / "dist"
+    version_dir = dist_root / f"v{version}"
+    app_dir = version_dir / "MB_Helper"
+    work_dir = BASE_DIR / "build" / f"v{version}"
+    # PyInstaller can replace its output folder. Resolve it first and protect
+    # persistent data from a previously used copy of this particular version.
+    if not app_dir.resolve().is_relative_to(dist_root.resolve()):
+        raise ValueError("Build output must stay inside the project dist folder")
+    if app_dir.exists() and any(any(app_dir.glob(pattern))
+                                for pattern in ("*.db*", "*.csv", "*.log", "overlay_position.json")):
+        raise FileExistsError("This version contains user data. Move it aside before rebuilding.")
+    work_dir.mkdir(parents=True, exist_ok=True)
+    (work_dir / "tmp").mkdir(exist_ok=True)
+    env = os.environ.copy()
+    env.update(TEMP=str(work_dir / "tmp"), TMP=str(work_dir / "tmp"),
+               PYINSTALLER_CONFIG_DIR=str(work_dir / "cache"))
 
-    cmd = [
-        sys.executable, "-m", "PyInstaller",
-        "--noconfirm",
-        "--onedir",
-        "--windowed",
-        "--name", "MB_Helper",
-        "--add-data", add_data_arg,
-        "--hidden-import", "keyboard",
-        "--hidden-import", "telemetry_logger",
-        "--hidden-import", "phantom_reader",
-        "--hidden-import", "phantom_bot",
-        "--hidden-import", "powerup_overlay",
-        "--hidden-import", "audit_powerups",
-        "phantom_gui.py"
-    ]
+    numeric_version = tuple(int(part) for part in version.split(".")) + (0,)
+    version_file = work_dir / "version_info.txt"
+    version_file.write_text(f"""VSVersionInfo(
+  ffi=FixedFileInfo(filevers={numeric_version!r}, prodvers={numeric_version!r},
+    mask=0x3f, flags=0x0, OS=0x40004, fileType=0x1, subtype=0x0, date=(0, 0)),
+  kids=[StringFileInfo([StringTable('040904B0', [
+    StringStruct('FileDescription', 'MB Helper'),
+    StringStruct('FileVersion', '{version}'),
+    StringStruct('InternalName', 'MB_Helper'),
+    StringStruct('OriginalFilename', 'MB_Helper.exe'),
+    StringStruct('ProductName', 'MB Helper'),
+    StringStruct('ProductVersion', '{version}')])]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])])])
+""", encoding="utf-8")
 
-    print("Comando:", " ".join(cmd))
-    res = subprocess.run(cmd, cwd=BASE_DIR)
-    if res.returncode != 0:
-        print("[ERROR] Error en compilación PyInstaller")
-        sys.exit(res.returncode)
+    cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--onedir", "--windowed",
+           "--name", "MB_Helper", "--distpath", str(version_dir), "--workpath", str(work_dir),
+           "--specpath", str(work_dir), "--version-file", str(version_file),
+           "--add-data", f"{BASE_DIR / 'assets' / 'item_icons'};assets/item_icons",
+           "--exclude-module", "keyboard", str(BASE_DIR / "phantom_gui.py")]
+    print(f"[1/3] Building MB Helper {version}", flush=True)
+    subprocess.run(cmd, cwd=BASE_DIR, env=env, check=True)
 
-    print("\n=== [3/3] Empaquetando Release Portable (.zip) ===")
-    output_app_dir = os.path.join(DIST_DIR, "MB_Helper")
-    
-    # Copiar README si existe
-    readme_path = os.path.join(BASE_DIR, "README.md")
-    if os.path.exists(readme_path):
-        shutil.copy2(readme_path, output_app_dir)
+    print("[2/3] Checking the compiled executable without game input", flush=True)
+    report_path = work_dir / "build-check.json"
+    if report_path.exists():
+        report_path.unlink()
+    subprocess.run([str(app_dir / "MB_Helper.exe"), "--check-build", str(report_path)],
+                   cwd=app_dir, env=env, check=True, timeout=60,
+                   creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    if not report.get("passed"):
+        raise RuntimeError(f"Compiled executable check failed: {report_path}")
 
-    # Crear archivo zip portable
-    zip_path = os.path.join(DIST_DIR, "MB_Helper_v1.0.0_Portable.zip")
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-        for root, dirs, files in os.walk(output_app_dir):
-            for file in files:
-                abs_path = os.path.join(root, file)
-                rel_path = os.path.relpath(abs_path, DIST_DIR)
-                zipf.write(abs_path, rel_path)
+    for name in ("README.md", "LICENSE"):
+        shutil.copy2(BASE_DIR / name, app_dir / name)
+    shutil.copytree(BASE_DIR / "docs", app_dir / "docs", dirs_exist_ok=True)
+    print("[3/3] Packaging the checked portable release", flush=True)
+    zip_path = dist_root / f"MB_Helper_v{version}_Portable.zip"
+    # Only application resources go into the ZIP, never logs, position or DBs.
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name in ("MB_Helper.exe", "README.md", "LICENSE", "_internal", "docs"):
+            path = app_dir / name
+            paths = sorted(path.rglob("*")) if path.is_dir() else [path]
+            for file in paths:
+                if file.is_file():
+                    archive.write(file, (Path("MB_Helper") / file.relative_to(app_dir)).as_posix())
+    checksum = hashlib.sha256(zip_path.read_bytes()).hexdigest()
+    checksum_path = Path(str(zip_path) + ".sha256")
+    checksum_path.write_text(f"{checksum}  {zip_path.name}\n", encoding="ascii")
+    print(json.dumps({"executable": str(app_dir / "MB_Helper.exe"), "zip": str(zip_path),
+                      "size_mb": round(zip_path.stat().st_size / (1024 * 1024), 2),
+                      "sha256": checksum, "build_check": report}, indent=2), flush=True)
+    return zip_path
 
-    print(f"\n[OK] BUILD EXITOSA!")
-    print(f"[OK] Carpeta de la App: {output_app_dir}")
-    print(f"[OK] Paquete ZIP listo para GitHub Release: {zip_path} ({os.path.getsize(zip_path) / (1024*1024):.2f} MB)")
 
 if __name__ == "__main__":
-    build_exe()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--version", default=DEFAULT_VERSION)
+    build_exe(parser.parse_args().version)

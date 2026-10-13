@@ -27,11 +27,18 @@ from phantom_reader import (
 )
 
 def run_powerup_audit():
+    reader = PhantomMemoryReader()
+    try:
+        return _run_powerup_audit(reader)
+    finally:
+        reader.close()
+
+
+def _run_powerup_audit(reader):
     print("=" * 70)
     print("🔍 AUDITORÍA DE CONTADOR DE POWERUPS - MEGABONK MEMORY SCANNER")
     print("=" * 70)
 
-    reader = PhantomMemoryReader()
     connected = reader.find_process()
     if not connected:
         print("\n❌ Megabonk NO está en ejecución.")

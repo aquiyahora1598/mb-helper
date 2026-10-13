@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "source_url": "https://www.youtube.com/watch?v=q0GJluxOWRY",
+  "title": "My BEST Megabonk Run (1.11M)",
+  "channel": "Sheney",
+  "character_id": null,
+  "game_version": null,
+  "category": null,
+  "reference_resolution": [1920, 1080],
+  "notes": "ROIs iniciales inspeccionadas en los segundos 20 y 34 del video. OCR aún no validado. Solo gameplay: menús, pausas y cambios de layout requieren perfiles separados. El oro de partida está junto a la moneda amarilla; 373,172 es otra moneda y no debe confundirse con gold.",
+  "fields": {
+    "run_time": {"roi": [0.028, 0.037, 0.042, 0.039], "kind": "timer", "min_confidence": 70},
+    "stage_time_remaining": {"roi": [0.470, 0.037, 0.060, 0.044], "kind": "timer", "min_confidence": 70},
+    "gold": {"roi": [0.208, 0.038, 0.055, 0.039], "kind": "integer", "min_confidence": 70},
+    "kills": {"roi": [0.305, 0.038, 0.050, 0.039], "kind": "integer", "min_confidence": 70},
+    "level": {"roi": [0.975, 0.039, 0.021, 0.044], "kind": "integer", "min_confidence": 70}
+  }
+}

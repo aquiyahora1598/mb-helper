@@ -11,18 +11,27 @@ import json
 import sqlite3
 import threading
 import math
+import logging
+import uuid
 from datetime import datetime
+from runtime_paths import data_path
+
+log = logging.getLogger(__name__)
 
 class TelemetryLogger:
     def __init__(self, reader, is_searching_callback=None, db_path=None, sample_interval=5.0):
         self.reader = reader
         self.is_searching_callback = is_searching_callback
-        self.db_path = db_path or os.path.join(os.path.dirname(os.path.abspath(__file__)), "telemetry.db")
+        self.db_path = db_path or data_path("telemetry.db")
         self.sample_interval = float(sample_interval)
+        if not math.isfinite(self.sample_interval) or self.sample_interval <= 0:
+            raise ValueError("sample_interval debe ser positivo y finito")
         
         self.is_running = False
         self._worker_thread = None
         self._lock = threading.RLock()
+        self._stop_event = threading.Event()
+        self._invalid_since = None
         
         # Estado de la partida actual
         self.current_run_id = None
@@ -39,6 +48,7 @@ class TelemetryLogger:
         conn = sqlite3.connect(self.db_path, timeout=10.0)
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA synchronous=NORMAL;")
+        conn.execute("PRAGMA foreign_keys=ON;")
         return conn
 
     def _init_db(self):
@@ -128,6 +138,7 @@ class TelemetryLogger:
             if self.is_running:
                 return
             self.is_running = True
+            self._stop_event.clear()
             self._worker_thread = threading.Thread(target=self._worker_loop, daemon=True, name="TelemetryWorker")
             self._worker_thread.start()
 
@@ -135,20 +146,25 @@ class TelemetryLogger:
         """Detiene el hilo y vuelca todos los datos pendientes a disco."""
         with self._lock:
             self.is_running = False
+            self._stop_event.set()
         if self._worker_thread and self._worker_thread.is_alive():
-            self._worker_thread.join(timeout=2.0)
-        self.flush_buffer(close_run=True)
+            self._worker_thread.join(timeout=12.0)
+            if self._worker_thread.is_alive():
+                raise TimeoutError("El lector de telemetría no terminó a tiempo")
+        if not self.flush_buffer(close_run=True):
+            raise RuntimeError("No se pudo guardar la telemetría pendiente")
 
     def _worker_loop(self):
-        while self.is_running:
+        while not self._stop_event.is_set():
             try:
-                t0 = time.time()
+                t0 = time.monotonic()
                 self._tick()
-                elapsed = time.time() - t0
+                elapsed = time.monotonic() - t0
                 sleep_time = max(0.2, self.sample_interval - elapsed)
-                time.sleep(sleep_time)
+                self._stop_event.wait(sleep_time)
             except Exception:
-                time.sleep(1.0)
+                log.exception("Error al registrar telemetría")
+                self._stop_event.wait(1.0)
 
     def _tick(self):
         if not self.reader:
@@ -168,16 +184,21 @@ class TelemetryLogger:
 
         with self._lock:
             now_iso = datetime.now().isoformat()
+            now = time.monotonic()
 
             # Caso Muerte: Si el juego activó la pantalla de Game Over
-            if is_game_over and self.current_run_id is not None:
-                self.last_run_time = run_time
-                self.last_stats = data
-                self._record_snapshot(data, now_iso)
-                self._close_run(outcome="death", now_iso=now_iso)
+            if is_game_over:
+                if self.current_run_id is not None:
+                    if is_valid and run_time >= self.last_run_time:
+                        self.last_run_time = run_time
+                        self.last_stats = data
+                        self._record_snapshot(data, now_iso)
+                    self._close_run(outcome="death", now_iso=now_iso)
+                self._invalid_since = None
                 return
 
             if is_valid:
+                self._invalid_since = None
                 # Caso A: Se detecta nueva partida iniciada
                 if self.current_run_id is None:
                     self._start_new_run(data, now_iso)
@@ -195,18 +216,17 @@ class TelemetryLogger:
                 # Si veníamos de una partida activa y ahora la lectura es inválida
                 # (jugador salió al menú o cerró el juego)
                 if self.current_run_id is not None:
-                    # Esperar 2 ticks por si es una pantalla de carga entre niveles
-                    if (time.time() - self._last_flush_time) > 6.0:
-                        outcome = "victory" if self.last_run_time >= 1200.0 else "abandoned"
-                        self._close_run(outcome=outcome, now_iso=now_iso)
+                    if self._invalid_since is None:
+                        self._invalid_since = now
+                    elif now - self._invalid_since >= 10.0:
+                        self._close_run(outcome="interrupted", now_iso=now_iso)
 
             # Volcar a SQLite periódicamente (cada 15s)
-            if (time.time() - self._last_flush_time) >= 15.0:
+            if (now - self._last_flush_time) >= 15.0:
                 self.flush_buffer(close_run=False)
 
     def _start_new_run(self, data, now_iso):
-        ms = int(time.time() * 1000) % 1000
-        run_id = f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{ms:03d}"
+        run_id = f"run_{uuid.uuid4().hex}"
         self.current_run_id = run_id
         self.run_start_time = now_iso
         self.last_run_time = data.get("run_time", 0.0)
@@ -215,7 +235,7 @@ class TelemetryLogger:
         conn = self._get_connection()
         cur = conn.cursor()
         cur.execute("""
-            INSERT OR REPLACE INTO runs (
+            INSERT INTO runs (
                 run_id, start_time, duration_seconds, character_id,
                 final_level, final_kills, final_gold, final_chests, outcome, is_record
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', 0)
@@ -339,41 +359,42 @@ class TelemetryLogger:
         """Elimina de la base de datos una partida descartada por durar < 15s."""
         if not self.current_run_id:
             return
-        run_id = self.current_run_id
         with self._lock:
+            run_id = self.current_run_id
+            if not run_id:
+                return
+            conn = self._get_connection()
+            try:
+                with conn:
+                    conn.execute("DELETE FROM snapshots WHERE run_id = ?;", (run_id,))
+                    conn.execute("DELETE FROM runs WHERE run_id = ?;", (run_id,))
+            finally:
+                conn.close()
             self.snapshots_buffer = [r for r in self.snapshots_buffer if r[0] != run_id]
             self.current_run_id = None
             self.run_start_time = None
             self.last_run_time = 0.0
             self.last_stats = None
-        try:
-            conn = self._get_connection()
-            cur = conn.cursor()
-            cur.execute("DELETE FROM snapshots WHERE run_id = ?;", (run_id,))
-            cur.execute("DELETE FROM runs WHERE run_id = ?;", (run_id,))
-            conn.commit()
-            conn.close()
-        except Exception:
-            pass
+            self._invalid_since = None
 
     def flush_buffer(self, close_run=False):
         """Vuelca snapshots acumulados en RAM directamente a SQLite en una sola transacción."""
+        # Serialize the transaction with discards and run closure, so a
+        # concurrent export cannot reinsert snapshots from a discarded run.
         with self._lock:
             if close_run and self.current_run_id:
                 self._close_run(outcome="stopped")
 
             if not self.snapshots_buffer:
-                self._last_flush_time = time.time()
-                return
+                self._last_flush_time = time.monotonic()
+                return True
 
             rows_to_insert = list(self.snapshots_buffer)
-            self.snapshots_buffer.clear()
-            self._last_flush_time = time.time()
-
-        try:
-            conn = self._get_connection()
-            cur = conn.cursor()
-            cur.executemany("""
+            conn = None
+            try:
+                conn = self._get_connection()
+                cur = conn.cursor()
+                cur.executemany("""
                 INSERT INTO snapshots (
                     run_id, timestamp, run_time, stage_time, level, gold, kills, chests, character_id,
                     max_hp, hp_regen, shield, thorns, armor, evasion, lifesteal,
@@ -392,12 +413,17 @@ class TelemetryLogger:
                     ?, ?, ?, ?, ?
                 )
             """, rows_to_insert)
-            conn.commit()
-            conn.close()
-        except Exception:
-            # Reintentar en la siguiente pasada
-            with self._lock:
-                self.snapshots_buffer = rows_to_insert + self.snapshots_buffer
+                conn.commit()
+                self.snapshots_buffer.clear()
+                self._last_flush_time = time.monotonic()
+                return True
+            except Exception:
+                # Keep the original buffer intact until the transaction commits.
+                log.exception("No se pudo guardar la telemetría; se conserva en memoria")
+                return False
+            finally:
+                if conn is not None:
+                    conn.close()
 
     def mark_run_as_record(self, run_id=None, is_record=1):
         """Marca una partida específica o la última como Récord (etiqueta target para LightGBM)."""
@@ -420,7 +446,7 @@ class TelemetryLogger:
         Exporta la matriz completa de snapshots enriquecida con el resultado final de cada partida.
         Genera el CSV tabular perfecto para entrenar directamente con LightGBM.
         """
-        output_path = output_path or os.path.join(os.path.dirname(os.path.abspath(__file__)), "telemetry_dataset.csv")
+        output_path = output_path or data_path("telemetry_dataset.csv")
         self.flush_buffer(close_run=False)
 
         conn = self._get_connection()
@@ -441,7 +467,7 @@ class TelemetryLogger:
                 r.is_record AS target_is_record
             FROM snapshots s
             JOIN runs r ON s.run_id = r.run_id
-            WHERE r.duration_seconds > 10.0
+            WHERE r.duration_seconds > 10.0 AND r.outcome != 'active'
             ORDER BY s.run_id, s.run_time ASC
         """
         cur.execute(query)

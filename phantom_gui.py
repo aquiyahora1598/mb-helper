@@ -1,7 +1,6 @@
 """
-MB Helper - Aplicacion Externa Legal para Steam Leaderboards
-Autor: Asistente AI & Usuario
-100% Legal: Cero inyeccion de DLLs en el directorio del juego.
+MB Helper - Buscador externo de semillas y HUD de powerups.
+Lectura de memoria sin inyeccion de DLLs en el directorio del juego.
 Lectura pasiva de memoria + Automatizacion con hardware input nativo y vision artificial.
 Atajo Global F5 para Iniciar / Detener en cualquier momento sin Alt+Tab.
 """
@@ -15,6 +14,7 @@ import sys
 import atexit
 import itertools
 import ctypes
+import queue
 from ctypes import wintypes
 
 try:
@@ -38,6 +38,12 @@ from phantom_reader import (
 from phantom_bot import PhantomBot
 from telemetry_logger import TelemetryLogger
 from powerup_overlay import PowerupOverlay
+from runtime_paths import application_dir
+from search_config import SEARCH_MODES, capture_configuration, search_setting
+from menu_ui import (MenuUI, COLOR_BG, COLOR_CARD, COLOR_CARD_ALT, COLOR_BORDER, COLOR_BORDER_GLOW,
+                     COLOR_GOLD, COLOR_PURPLE, COLOR_BLUE, COLOR_GREEN, COLOR_RED, COLOR_TEXT, COLOR_TEXT_DIM,
+                     FONT_TITLE, FONT_SUBTITLE, FONT_BODY, FONT_BOLD, FONT_TAB, FONT_MONO, FONT_COUNTER,
+                     RARITY_COLORS, THEORETICAL_MIN_PRICE, PRESET_KEYS, MENU_TEXT)
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
@@ -52,28 +58,10 @@ except Exception:
         pass
 
 # ==========================================
-# PALETA DE COLORES MODERNA (DARK CYBERNETIC)
-# ==========================================
-COLOR_BG = "#0B0D14"
-COLOR_CARD = "#141724"
-COLOR_CARD_ALT = "#1C2033"
-COLOR_BORDER = "#252B45"
-COLOR_BORDER_GLOW = "#38BDF8"
-COLOR_GOLD = "#FBBF24"
-COLOR_PURPLE = "#A855F7"
-COLOR_BLUE = "#60A5FA"
-COLOR_GREEN = "#22C55E"
-COLOR_RED = "#EF4444"
-COLOR_TEXT = "#F1F5F9"
-COLOR_TEXT_DIM = "#94A3B8"
-
 # ==========================================
 # SISTEMA DE AUDITORIA Y LOGGING
 # ==========================================
-if getattr(sys, 'frozen', False):
-    APP_DIR = os.path.dirname(sys.executable)
-else:
-    APP_DIR = os.path.dirname(os.path.abspath(__file__))
+APP_DIR = application_dir()
 LOG_FILE_PATH = os.path.join(APP_DIR, "megabonk_helper.log")
 _log_lock = threading.Lock()
 _log_file = None
@@ -105,60 +93,6 @@ def log_event(message, level="INFO"):
         except Exception:
             pass
 
-FONT_TITLE = ("Bahnschrift SemiBold", 14)
-FONT_SUBTITLE = ("Bahnschrift SemiBold", 11)
-FONT_BODY = ("Segoe UI", 9)
-FONT_BOLD = ("Segoe UI", 9, "bold")
-FONT_TAB = ("Bahnschrift SemiBold", 10)
-FONT_MONO = ("Consolas", 9)
-FONT_COUNTER = ("Bahnschrift SemiBold", 11)
-
-# Catalogo clasificado por rarezas oficiales con nombres en Espanol, Ingles y Portugues
-CATALOG_BY_RARITY = {
-    "Dorados (Legendarios)": [
-        (it[0], it[1], it[2], it[3], it[4]) for it in OFFICIAL_ITEMS if it[5] == "LEGENDARY"
-    ],
-    "Epicos (Morados)": [
-        (it[0], it[1], it[2], it[3], it[4]) for it in OFFICIAL_ITEMS if it[5] == "RARE"
-    ],
-    "Raros (Azules)": [
-        (it[0], it[1], it[2], it[3], it[4]) for it in OFFICIAL_ITEMS if it[5] == "UNCOMMON"
-    ],
-    "Comunes (Grises)": [
-        (it[0], it[1], it[2], it[3], it[4]) for it in OFFICIAL_ITEMS if it[5] == "COMMON" and it[0] != 0
-    ],
-}
-
-# Mínimos teóricos reales según rareza y multiplicador mínimo del juego (~0.50x)
-THEORETICAL_MIN_PRICE = {
-    "COMMON": 15,
-    "UNCOMMON": 35,
-    "RARE": 50,
-    "LEGENDARY": 120,
-}
-
-RARITY_COLORS = {
-    "LEGENDARY": COLOR_GOLD,
-    "RARE": "#A855F7",       # Púrpura / Épico
-    "UNCOMMON": "#38BDF8",   # Azul / Raro
-    "COMMON": "#94A3B8",     # Gris / Común
-}
-
-LIMITS_MAP = {
-    "vendors_golden": ("Vendedores Dorados", "Golden Vendors", "Vendedores Dourados", 3, "👑"),
-    "boss_curses": ("Maldiciones de Jefe", "Boss Curses", "Maldições de Chefe", 3, "💀"),
-    "moais": ("Moais de Piedra", "Stone Moais", "Moais de Pedra", 3, "🗿"),
-    "bald_heads": ("Cabezas Calvas (Cementerio)", "Bald Heads (Graveyard)", "Cabeças Calvas (Cemitério)", 20, "💀"),
-    "charge_shrines": ("Torres de Carga", "Upgrade Towers", "Torres de Carga", 20, "🏛️"),
-    "greed_shrines": ("Santuarios de Codicia", "Greed Shrines", "Santuários de Ganância", 12, "💰"),
-    "magnet_shrines": ("Santuarios de Iman", "Magnet Shrines", "Santuários de Ímã", 6, "🧲"),
-    "challenges": ("Desafios de Combate", "Combat Challenges", "Desafios de Combate", 6, "⚔️"),
-    "microwaves": ("Microondas", "Microwaves", "Micro-ondas", 4, "☢️"),
-    "microwaves_white": ("Microondas Blancos", "White Microwaves", "Micro-ondas Brancos", 4, "⚪"),
-    "chests": ("Cofres Totales", "Total Chests", "Baús Totais", 60, "📦"),
-    "pots": ("Vasijas Totales", "Total Pots", "Vasos Totais", 80, "🏺"),
-}
-
 # ==========================================
 # DICCIONARIO DE INTERNACIONALIZACION (I18N)
 # ==========================================
@@ -173,7 +107,6 @@ I18N = {
         "game_closed": "● Cerrado",
         "tab1": "🎯 MODO 1: ITEMS",
         "tab2": "👑 MODO 2: DORADOS",
-        "tab3": "⚙️ MODO 3: ESPECIFICO",
         "tab4": "⭐ MODO 4: PUNTUACION & PLANTILLAS",
         # Tab 1
         "items_chosen": "Items Elegidos (Max 3):",
@@ -189,9 +122,6 @@ I18N = {
         "gold_opt1": "👑 1 Vendedor Dorado",
         "gold_opt2": "👑👑 2 Vendedores Dorados",
         "gold_opt3": "👑👑👑 3 Vendedores Dorados (0.1%)",
-        # Tab 3
-        "tab3_title": "FILTROS CUANTITATIVOS EXACTOS",
-        "tab3_desc": "Elige exactamente la cantidad minima que debe tener el mapa para frenar.",
         # Tab 4
         "tier_title": "1. ELEGIR RANGO MINIMO:",
         "preset_title": "2. O ELEGIR UNA PLANTILLA META:",
@@ -277,7 +207,6 @@ I18N = {
         "game_closed": "● Closed",
         "tab1": "🎯 MODE 1: ITEMS",
         "tab2": "👑 MODE 2: GOLDENS",
-        "tab3": "⚙️ MODE 3: SPECIFIC",
         "tab4": "⭐ MODE 4: SCORES & PRESETS",
         # Tab 1
         "items_chosen": "Chosen Items (Max 3):",
@@ -297,8 +226,6 @@ I18N = {
         "gold_opt3": "👑👑👑 3 Golden Vendors",
         "gold_opt3_desc": "Legendary (~0.1% · Perfect)",
         # Tab 3
-        "tab3_title": "SPECIFIC FILTER",
-        "min_lbl": "Minimum:",
         # Tab 4
         "tab4_title": "SCORES & PRESETS",
         "tier_title": "🎯 1. Target Tier",
@@ -385,7 +312,6 @@ I18N = {
         "game_closed": "● Fechado",
         "tab1": "🎯 MODO 1: ITENS",
         "tab2": "👑 MODO 2: DOURADOS",
-        "tab3": "⚙️ MODO 3: ESPECIFICO",
         "tab4": "⭐ MODO 4: PONTOS & PRESETS",
         # Tab 1
         "items_chosen": "Itens Escolhidos (Max 3):",
@@ -402,8 +328,6 @@ I18N = {
         "gold_opt2": "👑👑 2 Vendedores Dourados",
         "gold_opt3": "👑👑👑 3 Vendedores Dourados (0.1%)",
         # Tab 3
-        "tab3_title": "FILTROS QUANTITATIVOS EXATOS",
-        "tab3_desc": "Escolha exatamente a quantidade minima que o mapa deve ter para parar.",
         # Tab 4
         "tier_title": "1. ESCOLHER TIER MINIMO:",
         "preset_title": "2. OU ESCOLHER UM PRESET META:",
@@ -481,160 +405,17 @@ I18N = {
     }
 }
 
-PRESET_HOVER_DATA = {
-    "es": {
-        "record_perfect_plus": {
-            "title": "🏆 Record Mundial (Perfect+)",
-            "tier": "Tier: 🔴 PERFECT+ (Score >= 30.0 pts)",
-            "reqs": "• Requisitos: Score >= 30.0 pts + 2 Microondas\n• Probabilidad: ~0.05% (Semilla Elite)\n• Uso: Speedruns y records mundiales."
-        },
-        "record_perfect_plus_white": {
-            "title": "🏆 Récord Mundial (2x Blancos)",
-            "tier": "Tier: 🔴 PERFECT+ (Score >= 30.0 pts)",
-            "reqs": "• Requisitos: Score >= 30.0 pts + 2 Microondas Blancos\n• Probabilidad: ~0.01% (Super Elite)\n• Uso: Duplicar el ítem básico de XP en speedruns."
-        },
-        "record_perfect": {
-            "title": "⭐ Gran Partida (Perfect)",
-            "tier": "Tier: 🟡 PERFECT (Score >= 25.0 pts)",
-            "reqs": "• Requisitos: Score >= 25.0 pts + 1 Microondas\n• Probabilidad: ~2.5% (~10-20 segundos)\n• Uso: Partidas competitivas de alto nivel."
-        },
-        "fast_good": {
-            "title": "⏱️ Busqueda Rapida (Good)",
-            "tier": "Tier: 🟢 GOOD (Score >= 20.0 pts)",
-            "reqs": "• Requisitos: Score global >= 20.0 pts\n• Probabilidad: ~20% (3 a 5 segundos)\n• Uso: Recomendada para jugar de inmediato."
-        },
-        "moai_rain": {
-            "title": "🗿 Lluvia de Moais (5+)",
-            "tier": "Tier: 🟢 GOOD (Score >= 20.0 pts)",
-            "reqs": "• Requisitos: Minimo 5 Moais + Score >= 20.0 pts\n• Probabilidad: ~4% (~10-15 segundos)\n• Uso: Builds pasivas de stats gratis."
-        },
-        "vendor_paradise": {
-            "title": "💰 Vendedores 5+ (Shady)",
-            "tier": "Tier: 🟢 GOOD (Score >= 20.0 pts)",
-            "reqs": "• Requisitos: Minimo 5 Vendedores + Score >= 20.0 pts\n• Probabilidad: ~3.5% (~15 segundos)\n• Uso: Economia y compra masiva de items."
-        },
-        "double_microwave": {
-            "title": "⚡ 2x Microondas",
-            "tier": "Tier: ⚪ LIGHT (Score >= 18.0 pts)",
-            "reqs": "• Requisitos: Minimo 2 Microondas + Score >= 18.0 pts\n• Probabilidad: ~5% (~5-10 segundos)\n• Uso: Duplicacion y coccion de items."
-        },
-        "double_microwave_white": {
-            "title": "⚡ 2x Microondas Blancos",
-            "tier": "Tier: ⚪ LIGHT (Score >= 18.0 pts)",
-            "reqs": "• Requisitos: Minimo 2 Microondas Blancos + Score >= 18.0 pts\n• Probabilidad: ~1.2% (~30-60 segundos)\n• Uso: Duplicar item basico de XP con partida decente."
-        },
-        "graveyard_bald_heads": {
-            "title": "💀 Moáis Calvos (10+ Bald Heads)",
-            "tier": "Mapa: ⚰️ CEMENTERIO",
-            "reqs": "• Requisitos: Minimo 10 Moais Calvos (Bald Heads)\n• Mapa: Exclusivo de Cementerio\n• Uso: Estrategia de Moais calvos en Cementerio."
-        }
-    },
-    "en": {
-        "record_perfect_plus": {
-            "title": "🏆 World Record (Perfect+)",
-            "tier": "Tier: 🔴 PERFECT+ (Score >= 30.0 pts)",
-            "reqs": "• Requirements: Score >= 30.0 pts + 2 Microwaves\n• Probability: ~0.05% (Elite Seed)\n• Usage: Speedruns and leaderboard records."
-        },
-        "record_perfect_plus_white": {
-            "title": "🏆 World Record (2x White)",
-            "tier": "Tier: 🔴 PERFECT+ (Score >= 30.0 pts)",
-            "reqs": "• Requirements: Score >= 30.0 pts + 2 White Microwaves\n• Probability: ~0.01% (Super Elite)\n• Usage: XP item multiplication in top speedruns."
-        },
-        "record_perfect": {
-            "title": "⭐ Great Run (Perfect)",
-            "tier": "Tier: 🟡 PERFECT (Score >= 25.0 pts)",
-            "reqs": "• Requirements: Score >= 25.0 pts + 1 Microwave\n• Probability: ~2.5% (~10-20 seconds)\n• Usage: High-tier competitive runs."
-        },
-        "fast_good": {
-            "title": "⏱️ Fast Search (Good)",
-            "tier": "Tier: 🟢 GOOD (Score >= 20.0 pts)",
-            "reqs": "• Requirements: Overall score >= 20.0 pts\n• Probability: ~20% (3-5 seconds)\n• Usage: Recommended to play immediately with a top seed."
-        },
-        "moai_rain": {
-            "title": "🗿 Moai Rain (5+)",
-            "tier": "Tier: 🟢 GOOD (Score >= 20.0 pts)",
-            "reqs": "• Requirements: Minimum 5 Moais + Score >= 20.0 pts\n• Probability: ~4% (~10-15 seconds)\n• Usage: Passive free-stat builds with Moais."
-        },
-        "vendor_paradise": {
-            "title": "💰 Vendors 5+ (Shady)",
-            "tier": "Tier: 🟢 GOOD (Score >= 20.0 pts)",
-            "reqs": "• Requirements: Minimum 5 Vendors + Score >= 20.0 pts\n• Probability: ~3.5% (~15 seconds)\n• Usage: Economy and mass shopping."
-        },
-        "double_microwave": {
-            "title": "⚡ 2x Microwaves",
-            "tier": "Tier: ⚪ LIGHT (Score >= 18.0 pts)",
-            "reqs": "• Requirements: Minimum 2 Microwaves + Score >= 18.0 pts\n• Probability: ~5% (~5-10 seconds)\n• Usage: Item duplication and crafting."
-        },
-        "double_microwave_white": {
-            "title": "⚡ 2x White Microwaves",
-            "tier": "Tier: ⚪ LIGHT (Score >= 18.0 pts)",
-            "reqs": "• Requirements: Minimum 2 White Microwaves + Score >= 18.0 pts\n• Probability: ~1.2% (~30-60 seconds)\n• Usage: Duplicate basic XP item in a solid run."
-        },
-        "graveyard_bald_heads": {
-            "title": "💀 Bald Heads (10+ Graveyard Moais)",
-            "tier": "Map: ⚰️ GRAVEYARD",
-            "reqs": "• Requirements: Minimum 10 Bald Heads\n• Map: Exclusive to Graveyard\n• Usage: Graveyard Bald Heads Moai strategy."
-        }
-    },
-    "pt": {
-        "record_perfect_plus": {
-            "title": "🏆 Recorde Mundial (Perfect+)",
-            "tier": "Tier: 🔴 PERFECT+ (Score >= 30.0 pts)",
-            "reqs": "• Requisitos: Score >= 30.0 pts + 2 Micro-ondas\n• Chance: ~0.05% (Seed Lendaria)\n• Uso: Speedruns e recordes mundiais."
-        },
-        "record_perfect_plus_white": {
-            "title": "🏆 Recorde Mundial (2x Brancos)",
-            "tier": "Tier: 🔴 PERFECT+ (Score >= 30.0 pts)",
-            "reqs": "• Requisitos: Score >= 30.0 pts + 2 Micro-ondas Brancos\n• Chance: ~0.01% (Super Elite)\n• Uso: Multiplicar item basico de XP em speedruns."
-        },
-        "record_perfect": {
-            "title": "⭐ Otima Partida (Perfect)",
-            "tier": "Tier: 🟡 PERFECT (Score >= 25.0 pts)",
-            "reqs": "• Requisitos: Score >= 25.0 pts + 1 Micro-ondas\n• Chance: ~2.5% (~10-20 segundos)\n• Uso: Partidas competitivas de alto nivel."
-        },
-        "fast_good": {
-            "title": "⏱️ Busca Rapida (Good)",
-            "tier": "Tier: 🟢 GOOD (Score >= 20.0 pts)",
-            "reqs": "• Requisitos: Score global >= 20.0 pts\n• Chance: ~20% (3 a 5 segundos)\n• Uso: Recomendado para jogar direto com mapa top."
-        },
-        "moai_rain": {
-            "title": "🗿 Chuva de Moais (5+)",
-            "tier": "Tier: 🟢 GOOD (Score >= 20.0 pts)",
-            "reqs": "• Requisitos: Minimo 5 Moais + Score >= 20.0 pts\n• Chance: ~4% (~10-15 segundos)\n• Uso: Builds focadas em atributos gratis de Moais."
-        },
-        "vendor_paradise": {
-            "title": "💰 Vendedores 5+ (Shady)",
-            "tier": "Tier: 🟢 GOOD (Score >= 20.0 pts)",
-            "reqs": "• Requisitos: Minimo 5 Vendedores + Score >= 20.0 pts\n• Chance: ~3.5% (~15 segundos)\n• Uso: Economia, ouro e compras massivas."
-        },
-        "double_microwave": {
-            "title": "⚡ 2x Micro-ondas",
-            "tier": "Tier: ⚪ LIGHT (Score >= 18.0 pts)",
-            "reqs": "• Requisitos: Minimo 2 Micro-ondas + Score >= 18.0 pts\n• Chance: ~5% (~5-10 segundos)\n• Uso: Estrategias de duplicacao de itens."
-        },
-        "double_microwave_white": {
-            "title": "⚡ 2x Micro-ondas Brancos",
-            "tier": "Tier: ⚪ LIGHT (Score >= 18.0 pts)",
-            "reqs": "• Requisitos: Minimo 2 Micro-ondas Brancos + Score >= 18.0 pts\n• Chance: ~1.2% (~30-60 segundos)\n• Uso: Duplicar item basico de XP em partida solida."
-        },
-        "graveyard_bald_heads": {
-            "title": "💀 Cabecas Calvas (10+ Moais Cemiterio)",
-            "tier": "Mapa: ⚰️ CEMITERIO",
-            "reqs": "• Requisitos: Minimo 10 Cabecas Calvas (Bald Heads)\n• Mapa: Exclusivo de Cemiterio\n• Uso: Estrategia de Moais calvos no Cemiterio."
-        }
-    }
-}
+for _language, _text in MENU_TEXT.items():
+    I18N[_language].update(_text)
 
 
-
-
-class MegabonkHelperApp(tk.Tk):
+class MegabonkHelperApp(MenuUI, tk.Tk):
     def __init__(self):
         super().__init__()
         self.current_lang = "es"
         self.title(self.t("title"))
-        self.geometry("1080x820")
-        self.minsize(760, 480)
+        self.geometry(f"{min(1160, self.winfo_screenwidth()-80)}x{min(820, self.winfo_screenheight()-100)}")
+        self.minsize(760, 540)
         self.configure(bg=COLOR_BG)
 
         self.reader = PhantomMemoryReader()
@@ -648,12 +429,24 @@ class MegabonkHelperApp(tk.Tk):
                 if fname.endswith(".png"):
                     cname = fname[:-4]
                     try:
-                        self.item_icons[cname] = tk.PhotoImage(file=os.path.join(icons_dir, fname))
+                        image = tk.PhotoImage(file=os.path.join(icons_dir, fname))
+                        factor = max(1, (max(image.width(), image.height()) + 35) // 36)
+                        self.item_icons[cname] = image.subsample(factor, factor) if factor > 1 else image
                     except Exception:
                         pass
 
         # Control de ciclo de vida
         self.is_closing = False
+        self._closing_event = threading.Event()
+        self._ui_queue = queue.SimpleQueue()
+        self._hotkey_lock = threading.Lock()
+        self._powerup_lock = threading.Lock()
+        self._powerup_sample = (0.0, None)
+        self._overlay_enabled = threading.Event()
+        self._overlay_enabled.set()
+        self.after(20, self._drain_ui_queue)
+        self._search_config = None
+        self._testing_reset = False
         self.is_running = False
         self.attempt_count = 0
         self.start_time = 0
@@ -688,19 +481,6 @@ class MegabonkHelperApp(tk.Tk):
         self._logged_item_timing = False
         self.waiting_for_scene_reload = False
         self.saw_zero_interactables = False
-
-        # Filtros Modo 3
-        self.ultra_filters = {}
-        for key, (label_es, label_en, label_pt, max_val, icon) in LIMITS_MAP.items():
-            self.ultra_filters[key] = {
-                "active": tk.BooleanVar(value=False),
-                "min_val": tk.IntVar(value=1),
-                "max_val": max_val,
-                "label_es": f"{icon} {label_es}",
-                "label_en": f"{icon} {label_en}",
-                "label_pt": f"{icon} {label_pt}",
-                "icon": icon
-            }
 
         # Construir Interfaz de Usuario
         self.setup_ui()
@@ -762,6 +542,8 @@ class MegabonkHelperApp(tk.Tk):
         self.update_ui_language()
 
     def update_ui_language(self):
+        if getattr(self, "powerup_overlay", None):
+            self.powerup_overlay.language = self.current_lang
         self.title(self.t("title"))
         self.lbl_legal.config(text=self.t("legal_badge"))
         self.lbl_lang_prefix.config(text=self.t("lang_lbl"))
@@ -769,7 +551,6 @@ class MegabonkHelperApp(tk.Tk):
         # Actualizar pestanas
         self.btn_tab1.config(text=self.t("tab1"))
         self.btn_tab2.config(text=self.t("tab2"))
-        self.btn_tab3.config(text=self.t("tab3"))
         self.btn_tab4.config(text=self.t("tab4"))
 
         # Tab 1
@@ -787,18 +568,6 @@ class MegabonkHelperApp(tk.Tk):
         self.lbl_gold2_desc.config(text=self.t("gold_opt2_desc"))
         self.rb_gold3.config(text=self.t("gold_opt3"))
         self.lbl_gold3_desc.config(text=self.t("gold_opt3_desc"))
-
-        # Tab 3
-        self.lbl_tab3_title.config(text=self.t("tab3_title"))
-        for key, f in self.ultra_filters.items():
-            if self.current_lang == "pt":
-                lbl_txt = f["label_pt"]
-            elif self.current_lang == "en":
-                lbl_txt = f["label_en"]
-            else:
-                lbl_txt = f["label_es"]
-            f["chk_widget"].config(text=lbl_txt)
-            f["lbl_min_widget"].config(text=self.t("min_lbl"))
 
         # Tab 4
         self.lbl_tab4_title.config(text=self.t("tab4_title"))
@@ -843,6 +612,8 @@ class MegabonkHelperApp(tk.Tk):
             self.btn_logs.config(text=self.t("btn_logs"))
         self.badge_afk.config(text=self.t("badge_afk"))
 
+        self.update_menu_language()
+
         # Actualizar estado de objetivo de preset o tier
         if self.score_submode.get() == "tier":
             self.on_select_tier()
@@ -850,1099 +621,28 @@ class MegabonkHelperApp(tk.Tk):
             self.apply_preset_template(self.selected_template.get())
 
     def on_exit(self):
-        self.is_closing = True
         self.is_running = False
+        if hasattr(self, "telemetry") and self.telemetry:
+            try:
+                self.telemetry.stop()
+            except Exception as exc:
+                self.reader.set_high_priority(False)
+                log_event(f"No se pudo guardar al cerrar: {exc}", level="ERROR")
+                messagebox.showerror("Telemetría", "No se pudo guardar el registro pendiente.\nLa ventana seguirá abierta para poder reintentar el cierre.")
+                return
+        self.is_closing = True
+        self._closing_event.set()
+        # Tcl timers can outlive widget commands when another Tk instance is
+        # created later in the same process. Cancel them before destruction.
+        for after_id in self.tk.splitlist(self.tk.call("after", "info")):
+            self.after_cancel(after_id)
         if hasattr(self, "powerup_overlay") and self.powerup_overlay:
             try:
                 self.powerup_overlay.window.destroy()
             except Exception:
                 pass
-        if hasattr(self, "telemetry") and self.telemetry:
-            try:
-                self.telemetry.stop()
-            except Exception:
-                pass
+        self.reader.close()
         self.destroy()
-
-    def setup_ui(self):
-        # 1. ENCABEZADO SUPERIOR
-        header = tk.Frame(self, bg=COLOR_CARD, highlightbackground=COLOR_BORDER, highlightthickness=1)
-        header.pack(side="top", fill="x", padx=14, pady=(10, 5))
-
-        title_box = tk.Frame(header, bg=COLOR_CARD)
-        title_box.pack(side="left", padx=12, pady=6)
-
-        tk.Label(
-            title_box,
-            text="MB HELPER",
-            font=FONT_TITLE,
-            bg=COLOR_CARD,
-            fg=COLOR_GOLD
-        ).pack(side="left")
-
-        self.lbl_legal = tk.Label(
-            title_box,
-            text=self.t("legal_badge"),
-            font=("Bahnschrift", 9, "bold"),
-            bg="#143320",
-            fg=COLOR_GREEN,
-            padx=8,
-            pady=2
-        )
-        self.lbl_legal.pack(side="left", padx=10)
-
-        # Selector de Idioma (Derecha)
-        lang_box = tk.Frame(header, bg=COLOR_CARD)
-        lang_box.pack(side="right", padx=12, pady=6)
-
-        self.lbl_lang_prefix = tk.Label(
-            lang_box,
-            text=self.t("lang_lbl"),
-            font=FONT_BODY,
-            bg=COLOR_CARD,
-            fg=COLOR_TEXT_DIM
-        )
-        self.lbl_lang_prefix.pack(side="left", padx=(0, 4))
-
-        self.lang_combo = ttk.Combobox(
-            lang_box,
-            values=["Español", "English", "Português (BR)"],
-            state="readonly",
-            width=14,
-            font=("Segoe UI", 9)
-        )
-        self.lang_combo.set("Español")
-        self.lang_combo.bind("<<ComboboxSelected>>", self.on_language_change)
-        self.lang_combo.pack(side="left", padx=(0, 10))
-
-        self.btn_header_overlay = tk.Button(
-            header,
-            text="⚡ HUD [F6]: ON",
-            font=("Segoe UI", 9, "bold"),
-            bg="#1E293B",
-            fg="#10B981",
-            activebackground="#334155",
-            activeforeground="#FFFFFF",
-            relief="flat",
-            padx=8,
-            pady=3,
-            cursor="hand2",
-            command=self.toggle_powerup_overlay
-        )
-        self.btn_header_overlay.pack(side="right", padx=(0, 10))
-
-        self.status_conn_lbl = tk.Label(
-            header,
-            text=self.t("looking_game"),
-            font=FONT_SUBTITLE,
-            bg=COLOR_CARD,
-            fg=COLOR_RED
-        )
-        self.status_conn_lbl.pack(side="right", padx=12, pady=6)
-
-        # 2. SELECTOR DE PESTANAS (NAV TABS)
-        nav_frame = tk.Frame(self, bg=COLOR_BG)
-        nav_frame.pack(side="top", fill="x", padx=14, pady=3)
-
-        self.btn_tab1 = tk.Button(
-            nav_frame, text=self.t("tab1"),
-            font=FONT_TAB, bg=COLOR_CARD_ALT, fg=COLOR_BORDER_GLOW,
-            activebackground=COLOR_CARD_ALT, activeforeground=COLOR_BORDER_GLOW,
-            relief="flat", pady=7, cursor="hand2",
-            command=lambda: self.switch_mode(1)
-        )
-        self.btn_tab1.pack(side="left", expand=True, fill="x", padx=(0, 3))
-
-        self.btn_tab2 = tk.Button(
-            nav_frame, text=self.t("tab2"),
-            font=FONT_TAB, bg=COLOR_CARD, fg=COLOR_TEXT_DIM,
-            activebackground=COLOR_CARD_ALT, activeforeground=COLOR_GOLD,
-            relief="flat", pady=7, cursor="hand2",
-            command=lambda: self.switch_mode(2)
-        )
-        self.btn_tab2.pack(side="left", expand=True, fill="x", padx=3)
-
-        self.btn_tab3 = tk.Button(
-            nav_frame, text=self.t("tab3"),
-            font=FONT_TAB, bg=COLOR_CARD, fg=COLOR_TEXT_DIM,
-            activebackground=COLOR_CARD_ALT, activeforeground=COLOR_PURPLE,
-            relief="flat", pady=7, cursor="hand2",
-            command=lambda: self.switch_mode(3)
-        )
-        self.btn_tab3.pack(side="left", expand=True, fill="x", padx=3)
-
-        self.btn_tab4 = tk.Button(
-            nav_frame, text=self.t("tab4"),
-            font=FONT_TAB, bg=COLOR_CARD, fg=COLOR_TEXT_DIM,
-            activebackground=COLOR_CARD_ALT, activeforeground=COLOR_GOLD,
-            relief="flat", pady=7, cursor="hand2",
-            command=lambda: self.switch_mode(4)
-        )
-        self.btn_tab4.pack(side="left", expand=True, fill="x", padx=(3, 0))
-
-        # 3. PANEL INFERIOR DE CONTROL Y ESTADISTICAS (Empaquetado primero en el fondo para garantizar visibilidad 100%)
-        bottom_panel = tk.Frame(self, bg=COLOR_CARD, highlightbackground=COLOR_BORDER, highlightthickness=1)
-        bottom_panel.pack(side="bottom", fill="x", padx=14, pady=(5, 10))
-
-        # FILA 1: Acciones principales y Badge AFK
-        ctrl_row1 = tk.Frame(bottom_panel, bg=COLOR_CARD)
-        ctrl_row1.pack(fill="x", padx=12, pady=(8, 4))
-
-        self.btn_action = tk.Button(
-            ctrl_row1,
-            text=self.t("btn_start"),
-            font=("Bahnschrift SemiBold", 11, "bold"),
-            bg="#0284C7",
-            fg="#FFFFFF",
-            activebackground="#0369A1",
-            activeforeground="#FFFFFF",
-            relief="flat",
-            padx=18,
-            pady=7,
-            cursor="hand2",
-            command=self.toggle_search
-        )
-        self.btn_action.pack(side="left")
-
-        self.btn_test_reset = tk.Button(
-            ctrl_row1,
-            text=self.t("btn_test_reset"),
-            font=("Bahnschrift", 9),
-            bg=COLOR_CARD_ALT,
-            fg=COLOR_GOLD,
-            activebackground="#2A3048",
-            activeforeground="#FFFFFF",
-            relief="flat",
-            padx=12,
-            pady=7,
-            cursor="hand2",
-            command=self.test_quick_reset
-        )
-        self.btn_test_reset.pack(side="left", padx=8)
-
-        self.btn_logs = tk.Button(
-            ctrl_row1,
-            text=self.t("btn_logs"),
-            font=("Bahnschrift", 9),
-            bg=COLOR_CARD_ALT,
-            fg="#A7F3D0",
-            activebackground="#2A3048",
-            activeforeground="#FFFFFF",
-            relief="flat",
-            padx=10,
-            pady=7,
-            cursor="hand2",
-            command=self.open_log_file
-        )
-        self.btn_logs.pack(side="left", padx=4)
-
-        self.btn_overlay_toggle = tk.Button(
-            ctrl_row1,
-            text="⚡ HUD Powerups [F6]: ON",
-            font=("Bahnschrift", 9, "bold"),
-            bg="#1E293B",
-            fg="#10B981",
-            activebackground="#334155",
-            activeforeground="#FFFFFF",
-            relief="flat",
-            padx=10,
-            pady=7,
-            cursor="hand2",
-            command=self.toggle_powerup_overlay
-        )
-        self.btn_overlay_toggle.pack(side="left", padx=4)
-
-        self.btn_audit_powerups = tk.Button(
-            ctrl_row1,
-            text="🔍 Auditar HUD",
-            font=("Bahnschrift", 9),
-            bg="#1E293B",
-            fg="#94A3B8",
-            activebackground="#334155",
-            activeforeground="#FFFFFF",
-            relief="flat",
-            padx=10,
-            pady=7,
-            cursor="hand2",
-            command=self.show_audit_powerups_dialog
-        )
-        self.btn_audit_powerups.pack(side="left", padx=4)
-        self.badge_afk = tk.Label(
-            ctrl_row1,
-            text=self.t("badge_afk"),
-            font=("Bahnschrift", 9),
-            bg="#292010",
-            fg=COLOR_GOLD,
-            padx=12,
-            pady=6
-        )
-        self.badge_afk.pack(side="right")
-
-        # FILA 2: Contador Intentos/Tiempo + Mensaje de Estado
-        ctrl_row2 = tk.Frame(bottom_panel, bg=COLOR_CARD)
-        ctrl_row2.pack(fill="x", padx=12, pady=(3, 5))
-
-        counter_box = tk.Frame(ctrl_row2, bg=COLOR_CARD_ALT, highlightbackground=COLOR_BORDER, highlightthickness=1, padx=10, pady=4)
-        counter_box.pack(side="left")
-
-        self.lbl_counter = tk.Label(
-            counter_box,
-            text=f"{self.t('attempts')}: #0  |  {self.t('time')}: 00:00",
-            font=FONT_COUNTER,
-            bg=COLOR_CARD_ALT,
-            fg=COLOR_GOLD
-        )
-        self.lbl_counter.pack()
-
-        self.lbl_status = tk.Label(
-            ctrl_row2,
-            text=self.t("status_stopped_user"),
-            font=FONT_BOLD,
-            bg=COLOR_CARD,
-            fg=COLOR_TEXT
-        )
-        self.lbl_status.pack(side="left", padx=14)
-
-        self.lbl_shortcuts_hint = tk.Label(
-            ctrl_row2,
-            text="[F5] Buscar  |  [F6] HUD Powerups",
-            font=("Segoe UI", 9, "bold"),
-            bg=COLOR_CARD,
-            fg="#94A3B8"
-        )
-        self.lbl_shortcuts_hint.pack(side="right", padx=10)
-
-        # FILA 3: Desglose de memoria en vivo
-        ctrl_row3 = tk.Frame(bottom_panel, bg=COLOR_CARD_ALT, highlightbackground=COLOR_BORDER, highlightthickness=1, padx=10, pady=4)
-        ctrl_row3.pack(fill="x", padx=12, pady=(0, 6))
-
-        self.lbl_live_data = tk.Label(
-            ctrl_row3,
-            text=f"⭐ {self.t('stat_score')}: 0.0 [{self.t('tier_standard')}] | {self.t('stat_gold')}: 0/3 | {self.t('stat_moais')}: 0 | {self.t('stat_curses')}: 0 | {self.t('stat_micros')}: 0 | {self.t('stat_chests')}: 0 | {self.t('stat_vendors')}: {self.t('status_reading')}",
-            font=FONT_MONO,
-            bg=COLOR_CARD_ALT,
-            fg=COLOR_TEXT_DIM,
-            anchor="w"
-        )
-        self.lbl_live_data.pack(fill="x")
-
-        # 4. CONTENEDOR PRINCIPAL (Ocupa todo el espacio dinamico restante entre pestanas y panel de control)
-        self.content_container = tk.Frame(self, bg=COLOR_BG)
-        self.content_container.pack(side="top", fill="both", expand=True, padx=14, pady=3)
-
-        self.tab1_frame = self.build_tab1_ui()
-        self.tab2_frame = self.build_tab2_ui()
-        self.tab3_frame = self.build_tab3_ui()
-        self.tab4_frame = self.build_tab4_ui()
-
-        self.tab1_frame.pack(fill="both", expand=True)
-
-    def create_scrollable_tab_frame(self):
-        """
-        Crea un contenedor con Canvas y Scrollbar vertical integrado para pestanas.
-        Permite desplazamiento fluido con la rueda del raton en resoluciones bajas o ventanas reducidas.
-        """
-        outer_frame = tk.Frame(self.content_container, bg=COLOR_CARD, highlightbackground=COLOR_BORDER, highlightthickness=1)
-        canvas = tk.Canvas(outer_frame, bg=COLOR_CARD, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(outer_frame, orient="vertical", command=canvas.yview)
-        content_frame = tk.Frame(canvas, bg=COLOR_CARD)
-
-        content_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-        win_id = canvas.create_window((0, 0), window=content_frame, anchor="nw")
-        canvas.bind(
-            "<Configure>",
-            lambda e: canvas.itemconfig(win_id, width=e.width)
-        )
-        canvas.configure(yscrollcommand=scrollbar.set)
-
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        return outer_frame, canvas, content_frame
-
-    def _on_global_mousewheel(self, event):
-        if not event.delta:
-            return
-        scroll_units = int(-1 * (event.delta / 120) * 2)
-        if scroll_units == 0:
-            scroll_units = -1 if event.delta > 0 else 1
-
-        mode = self.selected_mode.get()
-        target_canvas = None
-        if mode == 1:
-            target_canvas = getattr(self, "items_canvas", None)
-        elif mode == 2:
-            target_canvas = getattr(self, "tab2_canvas", None)
-        elif mode == 3:
-            target_canvas = getattr(self, "tab3_canvas", None)
-        elif mode == 4:
-            target_canvas = getattr(self, "tab4_canvas", None)
-
-        if target_canvas:
-            try:
-                target_canvas.yview_scroll(scroll_units, "units")
-            except Exception:
-                pass
-
-    def _on_global_mousewheel_linux(self, units):
-        mode = self.selected_mode.get()
-        canvases = {
-            1: getattr(self, "items_canvas", None),
-            2: getattr(self, "tab2_canvas", None),
-            3: getattr(self, "tab3_canvas", None),
-            4: getattr(self, "tab4_canvas", None)
-        }
-        target = canvases.get(mode)
-        if target:
-            try:
-                target.yview_scroll(units * 2, "units")
-            except Exception:
-                pass
-
-    # ==========================================================
-    # PESTANA 1: MODO ITEMS ESPECIFICOS
-    # ==========================================================
-    def build_tab1_ui(self):
-        frame = tk.Frame(self.content_container, bg=COLOR_CARD, highlightbackground=COLOR_BORDER, highlightthickness=1)
-
-        sel_bar = tk.Frame(frame, bg=COLOR_CARD)
-        sel_bar.pack(fill="x", padx=10, pady=(8, 4))
-
-        self.lbl_items_chosen_title = tk.Label(
-            sel_bar,
-            text=self.t("items_chosen"),
-            font=FONT_BOLD,
-            bg=COLOR_CARD,
-            fg=COLOR_BORDER_GLOW
-        )
-        self.lbl_items_chosen_title.pack(side="left", padx=(0, 8))
-
-        self.lbl_selected_items = tk.Label(
-            sel_bar,
-            text=self.t("items_none"),
-            font=FONT_BODY,
-            bg=COLOR_CARD,
-            fg=COLOR_TEXT_DIM
-        )
-        self.lbl_selected_items.pack(side="left")
-
-        self.btn_clear_items = tk.Button(
-            sel_bar,
-            text=self.t("btn_clear"),
-            font=("Bahnschrift", 9),
-            bg=COLOR_CARD_ALT,
-            fg=COLOR_RED,
-            activebackground=COLOR_CARD,
-            activeforeground="#FFFFFF",
-            relief="flat",
-            padx=10,
-            pady=2,
-            cursor="hand2",
-            command=self.clear_selected_items
-        )
-        self.btn_clear_items.pack(side="right")
-
-        self.f_selected_cards = tk.Frame(frame, bg=COLOR_CARD)
-        self.f_selected_cards.pack(fill="x", padx=10, pady=(0, 4))
-
-        search_bar = tk.Frame(frame, bg=COLOR_CARD)
-        search_bar.pack(fill="x", padx=10, pady=(2, 6))
-
-        self.lbl_search_title = tk.Label(search_bar, text=self.t("search_item"), font=FONT_BOLD, bg=COLOR_CARD, fg=COLOR_TEXT)
-        self.lbl_search_title.pack(side="left", padx=(0, 6))
-
-        self.search_var = tk.StringVar()
-        self.search_var.trace_add("write", lambda *args: self.refresh_items_grid())
-        search_entry = tk.Entry(
-            search_bar,
-            textvariable=self.search_var,
-            font=FONT_BODY,
-            bg=COLOR_CARD_ALT,
-            fg=COLOR_TEXT,
-            insertbackground="white",
-            relief="solid",
-            bd=1,
-            width=30
-        )
-        search_entry.pack(side="left")
-
-        # Canvas con scroll para los items
-        canvas_box = tk.Frame(frame, bg=COLOR_CARD)
-        canvas_box.pack(fill="both", expand=True, padx=8, pady=(0, 8))
-
-        self.items_canvas = tk.Canvas(canvas_box, bg=COLOR_CARD, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(canvas_box, orient="vertical", command=self.items_canvas.yview)
-        self.items_grid_frame = tk.Frame(self.items_canvas, bg=COLOR_CARD)
-
-        self.items_grid_frame.bind(
-            "<Configure>",
-            lambda e: self.items_canvas.configure(scrollregion=self.items_canvas.bbox("all"))
-        )
-        self.canvas_window = self.items_canvas.create_window((0, 0), window=self.items_grid_frame, anchor="nw")
-        self.items_canvas.bind("<Configure>", lambda e: self.items_canvas.itemconfig(self.canvas_window, width=e.width))
-
-        self.items_canvas.configure(yscrollcommand=scrollbar.set)
-        self.items_canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-
-        self.refresh_items_grid()
-        return frame
-
-    def refresh_items_grid(self):
-        for widget in self.items_grid_frame.winfo_children():
-            widget.destroy()
-
-        query = self.search_var.get().lower().strip()
-
-        rarity_keys = [
-            ("Dorados (Legendarios)", "rarity_golden", COLOR_GOLD),
-            ("Epicos (Morados)", "rarity_epic", COLOR_PURPLE),
-            ("Raros (Azules)", "rarity_rare", COLOR_BLUE),
-            ("Comunes (Grises)", "rarity_common", COLOR_TEXT_DIM)
-        ]
-
-        for cat_raw, i18n_key, cat_color in rarity_keys:
-            items = CATALOG_BY_RARITY.get(cat_raw, [])
-            filtered = []
-            for it in items:
-                # it: (id, codename, es_name, en_name, pt_name)
-                it_id, codename, es_name, en_name, pt_name = it
-                if self.current_lang == "pt":
-                    disp_name = pt_name
-                elif self.current_lang == "en":
-                    disp_name = en_name
-                else:
-                    disp_name = es_name
-
-                if (query == "" or query in codename.lower() or query in es_name.lower() or
-                        query in en_name.lower() or query in pt_name.lower()):
-                    filtered.append((it_id, codename, es_name, en_name, pt_name, disp_name))
-
-            if not filtered:
-                continue
-
-            sec_title = self.t(i18n_key)
-            sec_lbl = tk.Label(
-                self.items_grid_frame,
-                text=f"── {sec_title} ──",
-                font=("Bahnschrift SemiBold", 10),
-                bg=COLOR_CARD,
-                fg=cat_color,
-                anchor="w"
-            )
-            sec_lbl.pack(fill="x", padx=10, pady=(10, 4))
-
-            # Diseno de filas en 3 columnas uniformes
-            curr_row = None
-            for idx, (it_id, codename, es_name, en_name, pt_name, disp_name) in enumerate(filtered):
-                col = idx % 3
-                if col == 0:
-                    curr_row = tk.Frame(self.items_grid_frame, bg=COLOR_CARD)
-                    curr_row.pack(fill="x", padx=8, pady=2)
-                    for c in range(3):
-                        curr_row.columnconfigure(c, weight=1, uniform="item_col")
-
-                is_selected = any(s[0] == it_id for s in self.selected_items)
-                sel_idx = -1
-                for s_i, s in enumerate(self.selected_items):
-                    if s[0] == it_id:
-                        sel_idx = s_i + 1
-                        break
-
-                btn_bg = "#166534" if is_selected else COLOR_CARD_ALT
-                btn_fg = "#86EFAC" if is_selected else COLOR_TEXT
-                text_lbl = f"✓ #{sel_idx} {disp_name}" if is_selected else f"  {disp_name}"
-
-                icon_img = self.item_icons.get(codename)
-
-                btn = tk.Button(
-                    curr_row,
-                    text=text_lbl,
-                    image=icon_img,
-                    compound="left" if icon_img else "none",
-                    font=("Segoe UI", 9, "bold" if is_selected else "normal"),
-                    bg=btn_bg,
-                    fg=btn_fg,
-                    activebackground="#22C55E",
-                    activeforeground="#FFFFFF",
-                    relief="flat",
-                    padx=6,
-                    pady=4,
-                    anchor="w",
-                    cursor="hand2",
-                    command=lambda tid=it_id, tc=codename, te=es_name, tn=en_name, tp=pt_name: self.toggle_item_selection(tid, tc, te, tn, tp)
-                )
-                btn.grid(row=0, column=col, padx=4, pady=2, sticky="ew")
-
-    def toggle_item_selection(self, it_id, codename, es_name, en_name, pt_name):
-        existing = [idx for idx, s in enumerate(self.selected_items) if s[0] == it_id]
-        if existing:
-            self.selected_items.pop(existing[0])
-            self.item_max_prices.pop(it_id, None)
-        else:
-            if len(self.selected_items) >= 3:
-                messagebox.showinfo(self.t("alert_item_limit_title"), self.t("alert_item_limit_msg"))
-                return
-            self.selected_items.append((it_id, codename, es_name, en_name, pt_name))
-            if it_id not in self.item_max_prices:
-                self.item_max_prices[it_id] = tk.StringVar(value="")
-
-        self.update_selected_items_label()
-        self.refresh_items_grid()
-        self.update_tab4_items_label()
-
-    def update_selected_items_label(self):
-        if self.selected_items:
-            names = []
-            for idx, s in enumerate(self.selected_items):
-                n = s[4] if self.current_lang == "pt" else (s[3] if self.current_lang == "en" else s[2])
-                names.append(f"#{idx+1}: {n}")
-            self.lbl_selected_items.config(text=" | ".join(names), fg=COLOR_GREEN)
-        else:
-            self.lbl_selected_items.config(text=self.t("items_none"), fg=COLOR_TEXT_DIM)
-
-        # Renderizar tarjetas individuales con configuración de precio máximo
-        if hasattr(self, "f_selected_cards"):
-            for w in self.f_selected_cards.winfo_children():
-                w.destroy()
-
-            for idx, s in enumerate(self.selected_items):
-                it_id, codename, es_name, en_name, pt_name = s[:5]
-                n = s[4] if self.current_lang == "pt" else (s[3] if self.current_lang == "en" else s[2])
-                item_info = ITEM_BY_ID.get(it_id, ())
-                rarity_key = str(item_info[5]).upper() if len(item_info) >= 6 else "COMMON"
-                color_r = RARITY_COLORS.get(rarity_key, COLOR_TEXT)
-                min_price = THEORETICAL_MIN_PRICE.get(rarity_key, 20)
-
-                card = tk.Frame(self.f_selected_cards, bg=COLOR_CARD_ALT, highlightbackground=COLOR_BORDER, highlightthickness=1, padx=8, pady=3)
-                card.pack(fill="x", pady=2)
-
-                # Icono si está cargado
-                icon_img = self.item_icons.get(it_id)
-                if icon_img:
-                    lbl_ic = tk.Label(card, image=icon_img, bg=COLOR_CARD_ALT)
-                    lbl_ic.image = icon_img
-                    lbl_ic.pack(side="left", padx=(0, 6))
-
-                # Nombre con color de rareza
-                tk.Label(
-                    card,
-                    text=f"#{idx+1} {n}",
-                    font=FONT_BOLD,
-                    fg=color_r,
-                    bg=COLOR_CARD_ALT
-                ).pack(side="left", padx=(0, 8))
-
-                # Control de precio máximo
-                tk.Label(
-                    card,
-                    text=self.t("price_max_label"),
-                    font=FONT_BODY,
-                    fg=COLOR_TEXT,
-                    bg=COLOR_CARD_ALT
-                ).pack(side="left")
-
-                var = self.item_max_prices.setdefault(it_id, tk.StringVar(value=""))
-                ent = tk.Entry(
-                    card,
-                    textvariable=var,
-                    width=6,
-                    font=FONT_BOLD,
-                    bg=COLOR_BG,
-                    fg=COLOR_GOLD,
-                    insertbackground=COLOR_GOLD,
-                    justify="center"
-                )
-                ent.pack(side="left", padx=4)
-
-                tk.Label(
-                    card,
-                    text=self.t("price_gold"),
-                    font=FONT_BODY,
-                    fg=COLOR_TEXT_DIM,
-                    bg=COLOR_CARD_ALT
-                ).pack(side="left", padx=(0, 6))
-
-                # Etiqueta de ayuda y validación reactiva
-                lbl_hint = tk.Label(card, font=("Segoe UI", 8), bg=COLOR_CARD_ALT)
-                lbl_hint.pack(side="left", padx=4)
-
-                def make_validator(v_var, l_hint, m_p):
-                    def validate(*_):
-                        val = v_var.get().strip()
-                        if not val or val == "0":
-                            l_hint.config(text=self.t("price_min_hint", min=m_p), fg=COLOR_TEXT_DIM)
-                        else:
-                            try:
-                                num = int(val)
-                                if num < m_p:
-                                    l_hint.config(text=self.t("price_below_min", min=m_p), fg=COLOR_RED)
-                                else:
-                                    l_hint.config(text=self.t("price_ok_hint", max=num, min=m_p), fg=COLOR_GREEN)
-                            except ValueError:
-                                l_hint.config(text="⚠️ Solo números", fg=COLOR_RED)
-                    return validate
-
-                val_fn = make_validator(var, lbl_hint, min_price)
-                var.trace_add("write", val_fn)
-                val_fn()
-
-                # Botón de eliminar [✕]
-                btn_del = tk.Button(
-                    card,
-                    text="✕",
-                    font=("Segoe UI", 9, "bold"),
-                    fg=COLOR_RED,
-                    bg=COLOR_CARD_ALT,
-                    activebackground=COLOR_RED,
-                    activeforeground="#FFFFFF",
-                    relief="flat",
-                    padx=6,
-                    pady=0,
-                    cursor="hand2",
-                    command=lambda tid=it_id, tc=codename, te=es_name, tn=en_name, tp=pt_name: self.toggle_item_selection(tid, tc, te, tn, tp)
-                )
-                btn_del.pack(side="right")
-
-    def clear_selected_items(self):
-        self.selected_items.clear()
-        self.item_max_prices.clear()
-        self.update_selected_items_label()
-        self.refresh_items_grid()
-        self.update_tab4_items_label()
-
-    # ==========================================================
-    # PESTANA 2: VENDEDORES DORADOS
-    # ==========================================================
-    def build_tab2_ui(self):
-        outer_frame, self.tab2_canvas, frame = self.create_scrollable_tab_frame()
-
-        self.lbl_tab2_title = tk.Label(
-            frame,
-            text=self.t("tab2_title"),
-            font=FONT_TITLE,
-            bg=COLOR_CARD,
-            fg=COLOR_GOLD
-        )
-        self.lbl_tab2_title.pack(pady=(16, 12))
-
-        opts_frame = tk.Frame(frame, bg=COLOR_CARD)
-        opts_frame.pack(pady=4)
-
-        # Opcion 1
-        box1 = tk.Frame(opts_frame, bg=COLOR_CARD_ALT, highlightbackground=COLOR_BORDER, highlightthickness=1, padx=20, pady=10)
-        box1.pack(fill="x", pady=5)
-        self.rb_gold1 = tk.Radiobutton(
-            box1, text=self.t("gold_opt1"), variable=self.target_golden_vendors, value=1,
-            font=FONT_BOLD, bg=COLOR_CARD_ALT, fg=COLOR_BORDER_GLOW, selectcolor="#0D0F18",
-            activebackground=COLOR_CARD_ALT, activeforeground=COLOR_BORDER_GLOW, cursor="hand2",
-            command=self.update_tab4_golden_label
-        )
-        self.rb_gold1.pack(anchor="w")
-        self.lbl_gold1_desc = tk.Label(box1, text=self.t("gold_opt1_desc"), font=FONT_BODY, bg=COLOR_CARD_ALT, fg=COLOR_TEXT_DIM)
-        self.lbl_gold1_desc.pack(anchor="w", padx=24)
-
-        # Opcion 2
-        box2 = tk.Frame(opts_frame, bg=COLOR_CARD_ALT, highlightbackground=COLOR_BORDER, highlightthickness=1, padx=20, pady=10)
-        box2.pack(fill="x", pady=5)
-        self.rb_gold2 = tk.Radiobutton(
-            box2, text=self.t("gold_opt2"), variable=self.target_golden_vendors, value=2,
-            font=FONT_BOLD, bg=COLOR_CARD_ALT, fg=COLOR_PURPLE, selectcolor="#0D0F18",
-            activebackground=COLOR_CARD_ALT, activeforeground=COLOR_PURPLE, cursor="hand2",
-            command=self.update_tab4_golden_label
-        )
-        self.rb_gold2.pack(anchor="w")
-        self.lbl_gold2_desc = tk.Label(box2, text=self.t("gold_opt2_desc"), font=FONT_BODY, bg=COLOR_CARD_ALT, fg=COLOR_TEXT_DIM)
-        self.lbl_gold2_desc.pack(anchor="w", padx=24)
-
-        # Opcion 3
-        box3 = tk.Frame(opts_frame, bg=COLOR_CARD_ALT, highlightbackground=COLOR_BORDER, highlightthickness=1, padx=20, pady=10)
-        box3.pack(fill="x", pady=5)
-        self.rb_gold3 = tk.Radiobutton(
-            box3, text=self.t("gold_opt3"), variable=self.target_golden_vendors, value=3,
-            font=FONT_BOLD, bg=COLOR_CARD_ALT, fg=COLOR_GOLD, selectcolor="#0D0F18",
-            activebackground=COLOR_CARD_ALT, activeforeground=COLOR_GOLD, cursor="hand2",
-            command=self.update_tab4_golden_label
-        )
-        self.rb_gold3.pack(anchor="w")
-        self.lbl_gold3_desc = tk.Label(box3, text=self.t("gold_opt3_desc"), font=FONT_BODY, bg=COLOR_CARD_ALT, fg=COLOR_TEXT_DIM)
-        self.lbl_gold3_desc.pack(anchor="w", padx=24)
-
-        return outer_frame
-
-    # ==========================================================
-    # PESTANA 3: ESPECIFICO INTERACTUABLES
-    # ==========================================================
-    def build_tab3_ui(self):
-        outer_frame, self.tab3_canvas, frame = self.create_scrollable_tab_frame()
-
-        self.lbl_tab3_title = tk.Label(
-            frame,
-            text=self.t("tab3_title"),
-            font=FONT_TITLE,
-            bg=COLOR_CARD,
-            fg=COLOR_PURPLE
-        )
-        self.lbl_tab3_title.pack(pady=(16, 12))
-
-        grid_frame = tk.Frame(frame, bg=COLOR_CARD)
-        grid_frame.pack(padx=16, pady=4)
-
-        row, col = 0, 0
-        for key, filter_info in self.ultra_filters.items():
-            cell = tk.Frame(grid_frame, bg=COLOR_CARD_ALT, highlightbackground=COLOR_BORDER, highlightthickness=1, padx=12, pady=8)
-            cell.grid(row=row, column=col, padx=6, pady=4, sticky="ew")
-
-            chk = tk.Checkbutton(
-                cell,
-                text=filter_info["label_es"],
-                variable=filter_info["active"],
-                font=FONT_BOLD,
-                bg=COLOR_CARD_ALT,
-                fg=COLOR_TEXT,
-                selectcolor="#0D0F18",
-                activebackground=COLOR_CARD_ALT,
-                activeforeground=COLOR_TEXT,
-                cursor="hand2"
-            )
-            chk.pack(anchor="w")
-            filter_info["chk_widget"] = chk
-
-            spin_frame = tk.Frame(cell, bg=COLOR_CARD_ALT)
-            spin_frame.pack(anchor="w", pady=(2, 0))
-
-            lbl_m = tk.Label(spin_frame, text=self.t("min_lbl"), font=FONT_BODY, bg=COLOR_CARD_ALT, fg=COLOR_TEXT_DIM)
-            lbl_m.pack(side="left")
-            filter_info["lbl_min_widget"] = lbl_m
-
-            sp = tk.Spinbox(
-                spin_frame,
-                from_=0,
-                to=filter_info["max_val"],
-                textvariable=filter_info["min_val"],
-                width=4,
-                font=FONT_BOLD,
-                bg=COLOR_BG,
-                fg=COLOR_GOLD,
-                buttonbackground=COLOR_CARD
-            )
-            sp.pack(side="left", padx=4)
-
-            tk.Label(spin_frame, text=f"(Max: {filter_info['max_val']})", font=FONT_BODY, bg=COLOR_CARD_ALT, fg=COLOR_TEXT_DIM).pack(side="left")
-
-            col += 1
-            if col >= 2:
-                col = 0
-                row += 1
-
-        return outer_frame
-
-    # ==========================================================
-    # PESTANA 4: PUNTUACION, RANGOS Y PLANTILLAS (SCORES)
-    # ==========================================================
-    def build_tab4_ui(self):
-        outer_frame, self.tab4_canvas, frame = self.create_scrollable_tab_frame()
-
-        self.lbl_tab4_title = tk.Label(
-            frame,
-            text=self.t("tab4_title"),
-            font=FONT_TITLE,
-            bg=COLOR_CARD,
-            fg=COLOR_GOLD
-        )
-        self.lbl_tab4_title.pack(pady=(12, 6))
-
-        columns_frame = tk.Frame(frame, bg=COLOR_CARD)
-        columns_frame.pack(fill="x", padx=14, pady=2)
-
-        # COLUMNA IZQUIERDA: SELECTOR DE RANGOS
-        left_col = tk.Frame(columns_frame, bg=COLOR_CARD_ALT, highlightbackground=COLOR_BORDER, highlightthickness=1, padx=12, pady=8)
-        left_col.pack(side="left", fill="both", expand=True, padx=(0, 6))
-
-        self.lbl_tier_sec_title = tk.Label(
-            left_col,
-            text=self.t("tier_title"),
-            font=FONT_SUBTITLE,
-            bg=COLOR_CARD_ALT,
-            fg=COLOR_BORDER_GLOW
-        )
-        self.lbl_tier_sec_title.pack(anchor="w", pady=(0, 4))
-
-        tiers_order = [
-            ("Perfect+", "🔴 PERFECT+ (Score ≥ 30)", "#EF4444"),
-            ("Perfect", "🟡 PERFECT (Score ≥ 25)", "#FBBF24"),
-            ("Good", "🟢 GOOD (Score ≥ 20)", "#22C55E"),
-            ("Light", "⚪ LIGHT (Score ≥ 14)", "#E2E8F0")
-        ]
-
-        for tier_key, tier_lbl, tier_col in tiers_order:
-            box = tk.Frame(left_col, bg=COLOR_CARD, highlightbackground=COLOR_BORDER, highlightthickness=1, padx=8, pady=3)
-            box.pack(fill="x", pady=2)
-
-            rb = tk.Radiobutton(
-                box,
-                text=tier_lbl,
-                variable=self.target_tier,
-                value=tier_key,
-                font=FONT_BOLD,
-                bg=COLOR_CARD,
-                fg=tier_col,
-                selectcolor="#0D0F18",
-                activebackground=COLOR_CARD,
-                activeforeground=tier_col,
-                cursor="hand2",
-                command=self.on_select_tier
-            )
-            rb.pack(anchor="w")
-
-        # COLUMNA DERECHA: PLANTILLAS RAPIDAS (PRESETS)
-        right_col = tk.Frame(columns_frame, bg=COLOR_CARD_ALT, highlightbackground=COLOR_BORDER, highlightthickness=1, padx=12, pady=8)
-        right_col.pack(side="right", fill="both", expand=True, padx=(6, 0))
-
-        self.lbl_preset_sec_title = tk.Label(
-            right_col,
-            text=self.t("preset_title"),
-            font=FONT_SUBTITLE,
-            bg=COLOR_CARD_ALT,
-            fg=COLOR_PURPLE
-        )
-        self.lbl_preset_sec_title.pack(anchor="w", pady=(0, 2))
-
-        # SUBSECCION 1: BOSQUE Y DESIERTO
-        self.lbl_forest_title = tk.Label(
-            right_col,
-            text=self.t("preset_sec_forest"),
-            font=("Bahnschrift", 9, "bold"),
-            bg=COLOR_CARD_ALT,
-            fg="#6EE7B7"
-        )
-        self.lbl_forest_title.pack(anchor="w", pady=(2, 2))
-
-        forest_presets = [
-            ("record_perfect_plus", "🏆 Record Mundial (Perfect+)", "#EF4444"),
-            ("record_perfect_plus_white", "🏆 Récord (2x Blancos)", "#F43F5E"),
-            ("record_perfect", "⭐ Gran Partida (Perfect)", "#FBBF24"),
-            ("fast_good", "⏱️ Busqueda Rapida (Good)", "#22C55E"),
-            ("moai_rain", "🗿 Lluvia Moais (5+)", "#38BDF8"),
-            ("vendor_paradise", "💰 Vendedores 5+ (Shady)", "#F59E0B"),
-            ("double_microwave", "⚡ 2x Microondas", "#A855F7"),
-            ("double_microwave_white", "⚡ 2x Micros Blancos", "#C084FC")
-        ]
-
-        preset_grid = tk.Frame(right_col, bg=COLOR_CARD_ALT)
-        preset_grid.pack(fill="x")
-
-        self.preset_buttons = {}
-        for p_idx, (p_id, p_name, p_color) in enumerate(forest_presets):
-            p_row = p_idx // 2
-            p_col = p_idx % 2
-            btn_preset = tk.Button(
-                preset_grid,
-                text=p_name,
-                font=("Bahnschrift", 9),
-                bg=COLOR_CARD,
-                fg=p_color,
-                activebackground="#252B45",
-                activeforeground="#FFFFFF",
-                relief="flat",
-                padx=6,
-                pady=4,
-                wraplength=170,
-                cursor="hand2",
-                command=lambda pid=p_id: self.apply_preset_template(pid)
-            )
-            btn_preset.grid(row=p_row, column=p_col, padx=4, pady=2, sticky="ew")
-            btn_preset.bind("<Enter>", lambda e, pid=p_id: self.on_preset_hover(pid))
-            btn_preset.bind("<Leave>", lambda e: self.on_preset_leave())
-            preset_grid.columnconfigure(p_col, weight=1)
-            self.preset_buttons[p_id] = btn_preset
-
-        # SUBSECCION 2: CEMENTERIO (SEPARADA Y DESTACADA)
-        graveyard_box = tk.Frame(right_col, bg="#181528", highlightbackground="#6D28D9", highlightthickness=1, padx=6, pady=4)
-        graveyard_box.pack(fill="x", pady=(6, 2))
-
-        self.lbl_graveyard_title = tk.Label(
-            graveyard_box,
-            text=self.t("preset_sec_graveyard"),
-            font=("Bahnschrift", 9, "bold"),
-            bg="#181528",
-            fg="#C084FC"
-        )
-        self.lbl_graveyard_title.pack(anchor="w", pady=(0, 2))
-
-        btn_grave = tk.Button(
-            graveyard_box,
-            text=self.t("preset_graveyard_bald"),
-            font=("Bahnschrift", 9, "bold"),
-            bg=COLOR_CARD,
-            fg="#A78BFA",
-            activebackground="#2D2248",
-            activeforeground="#FFFFFF",
-            relief="flat",
-            padx=8,
-            pady=4,
-            cursor="hand2",
-            command=lambda: self.apply_preset_template("graveyard_bald_heads")
-        )
-        btn_grave.pack(fill="x")
-        btn_grave.bind("<Enter>", lambda e: self.on_preset_hover("graveyard_bald_heads"))
-        btn_grave.bind("<Leave>", lambda e: self.on_preset_leave())
-        self.preset_buttons["graveyard_bald_heads"] = btn_grave
-
-        self.lbl_preset_active = tk.Label(
-            right_col,
-            text="Objetivo actual: 🟢 GOOD (Score ≥ 20)",
-            font=FONT_BODY,
-            bg=COLOR_CARD_ALT,
-            fg=COLOR_GREEN,
-            anchor="w"
-        )
-        self.lbl_preset_active.pack(fill="x", pady=(8, 0))
-
-        # Cuadro de Informacion / Hover de Plantilla
-        self.preset_hover_card = tk.Frame(right_col, bg=COLOR_CARD, highlightbackground=COLOR_BORDER, highlightthickness=1, padx=8, pady=5)
-        self.preset_hover_card.pack(fill="x", pady=(6, 0))
-
-        self.lbl_preset_hover_title = tk.Label(
-            self.preset_hover_card,
-            text=self.t("preset_hover_hint"),
-            font=FONT_BOLD,
-            bg=COLOR_CARD,
-            fg=COLOR_BORDER_GLOW,
-            anchor="w"
-        )
-        self.lbl_preset_hover_title.pack(fill="x")
-
-        self.lbl_preset_hover_desc = tk.Label(
-            self.preset_hover_card,
-            text=self.t("preset_hover_default"),
-            font=FONT_BODY,
-            bg=COLOR_CARD,
-            fg=COLOR_TEXT_DIM,
-            anchor="w",
-            justify="left",
-            wraplength=380
-        )
-        self.lbl_preset_hover_desc.pack(fill="x", pady=(2, 0))
-
-        # CARD INTERMEDIO: COMBINACION CON MODO 1 Y MODO 2 (VENDEDORES DORADOS)
-        combo_card = tk.Frame(frame, bg=COLOR_CARD_ALT, highlightbackground=COLOR_BORDER, highlightthickness=1, padx=12, pady=6)
-        combo_card.pack(fill="x", padx=14, pady=(4, 4))
-
-        # 1. Filtro de Items Modo 1
-        self.chk_combo = tk.Checkbutton(
-            combo_card,
-            text=self.t("combo_chk"),
-            variable=self.require_mode1_items,
-            font=FONT_BOLD,
-            bg=COLOR_CARD_ALT,
-            fg=COLOR_GOLD,
-            selectcolor="#0D0F18",
-            activebackground=COLOR_CARD_ALT,
-            activeforeground=COLOR_GOLD,
-            cursor="hand2",
-            command=self.update_tab4_items_label
-        )
-        self.chk_combo.pack(anchor="w")
-
-        self.lbl_tab4_items_preview = tk.Label(
-            combo_card,
-            text=self.t("combo_none"),
-            font=FONT_BODY,
-            bg=COLOR_CARD_ALT,
-            fg=COLOR_TEXT_DIM,
-            anchor="w"
-        )
-        self.lbl_tab4_items_preview.pack(fill="x", pady=(1, 4))
-
-        # Separador visual
-        tk.Frame(combo_card, bg=COLOR_BORDER, height=1).pack(fill="x", pady=(2, 4))
-
-        # 2. Filtro de Vendedores Dorados Modo 2
-        golden_row = tk.Frame(combo_card, bg=COLOR_CARD_ALT)
-        golden_row.pack(fill="x", anchor="w")
-
-        self.chk_combo_golden = tk.Checkbutton(
-            golden_row,
-            text=self.t("combo_golden_chk"),
-            variable=self.require_golden_vendors,
-            font=FONT_BOLD,
-            bg=COLOR_CARD_ALT,
-            fg=COLOR_GOLD,
-            selectcolor="#0D0F18",
-            activebackground=COLOR_CARD_ALT,
-            activeforeground=COLOR_GOLD,
-            cursor="hand2",
-            command=self.update_tab4_golden_label
-        )
-        self.chk_combo_golden.pack(side="left", anchor="w")
-
-        self.gold_btns_frame = tk.Frame(golden_row, bg=COLOR_CARD_ALT)
-        self.gold_btns_frame.pack(side="left", padx=(10, 0))
-
-        self.rb_tab4_g1 = tk.Radiobutton(
-            self.gold_btns_frame, text="1 👑", variable=self.target_golden_vendors, value=1,
-            font=("Bahnschrift", 9), bg=COLOR_CARD_ALT, fg=COLOR_BORDER_GLOW, selectcolor="#0D0F18",
-            activebackground=COLOR_CARD_ALT, activeforeground=COLOR_BORDER_GLOW, cursor="hand2",
-            command=self.update_tab4_golden_label
-        )
-        self.rb_tab4_g1.pack(side="left", padx=2)
-
-        self.rb_tab4_g2 = tk.Radiobutton(
-            self.gold_btns_frame, text="2 👑👑", variable=self.target_golden_vendors, value=2,
-            font=("Bahnschrift", 9), bg=COLOR_CARD_ALT, fg=COLOR_PURPLE, selectcolor="#0D0F18",
-            activebackground=COLOR_CARD_ALT, activeforeground=COLOR_PURPLE, cursor="hand2",
-            command=self.update_tab4_golden_label
-        )
-        self.rb_tab4_g2.pack(side="left", padx=2)
-
-        self.rb_tab4_g3 = tk.Radiobutton(
-            self.gold_btns_frame, text="3 👑👑👑", variable=self.target_golden_vendors, value=3,
-            font=("Bahnschrift", 9), bg=COLOR_CARD_ALT, fg=COLOR_GOLD, selectcolor="#0D0F18",
-            activebackground=COLOR_CARD_ALT, activeforeground=COLOR_GOLD, cursor="hand2",
-            command=self.update_tab4_golden_label
-        )
-        self.rb_tab4_g3.pack(side="left", padx=2)
-
-        self.lbl_tab4_golden_preview = tk.Label(
-            combo_card,
-            text="",
-            font=FONT_BODY,
-            bg=COLOR_CARD_ALT,
-            fg=COLOR_TEXT_DIM,
-            anchor="w"
-        )
-        self.lbl_tab4_golden_preview.pack(fill="x", pady=(1, 0))
-        self.update_tab4_golden_label()
-
-        # CARD INFERIOR: LIVE SCORE METER
-        score_card = tk.Frame(frame, bg="#0D111E", highlightbackground=COLOR_BORDER_GLOW, highlightthickness=1, padx=12, pady=6)
-        score_card.pack(fill="x", padx=14, pady=(4, 8))
-
-        sc_top = tk.Frame(score_card, bg="#0D111E")
-        sc_top.pack(fill="x")
-
-        self.lbl_score_meter_title = tk.Label(
-            sc_top,
-            text=self.t("score_meter_title"),
-            font=FONT_BOLD,
-            bg="#0D111E",
-            fg=COLOR_BORDER_GLOW
-        )
-        self.lbl_score_meter_title.pack(side="left")
-
-        self.lbl_live_score_val = tk.Label(
-            sc_top,
-            text=self.t("score_waiting"),
-            font=FONT_TITLE,
-            bg="#0D111E",
-            fg=COLOR_GOLD
-        )
-        self.lbl_live_score_val.pack(side="right")
-
-        return outer_frame
 
     def update_tab4_items_label(self):
         if not hasattr(self, "lbl_tab4_items_preview"):
@@ -1954,7 +654,7 @@ class MegabonkHelperApp(tk.Tk):
                 it_id = s[0]
                 p_var = self.item_max_prices.get(it_id)
                 p_val = p_var.get().strip() if isinstance(p_var, tk.StringVar) else str(p_var or "").strip()
-                if p_val and p_val.isdigit() and int(p_val) > 0:
+                if p_val and p_val.isascii() and p_val.isdecimal() and len(p_val) <= 9 and int(p_val) > 0:
                     names.append(f"{n} (≤{p_val}g)")
                 else:
                     names.append(n)
@@ -1983,8 +683,7 @@ class MegabonkHelperApp(tk.Tk):
             self.lbl_tab4_golden_preview.config(text=txt, fg=COLOR_TEXT_DIM)
 
     def on_preset_hover(self, preset_id):
-        lang = self.current_lang if self.current_lang in ("en", "pt") else "es"
-        data = PRESET_HOVER_DATA.get(lang, {}).get(preset_id)
+        data = self.preset_details(preset_id)
         if data and hasattr(self, "lbl_preset_hover_title"):
             self.lbl_preset_hover_title.config(text=f"{data['title']}  |  {data['tier']}", fg=COLOR_GOLD)
             self.lbl_preset_hover_desc.config(text=data['reqs'], fg=COLOR_TEXT)
@@ -1996,8 +695,7 @@ class MegabonkHelperApp(tk.Tk):
         if not hasattr(self, "lbl_preset_hover_title"):
             return
         curr_pid = self.selected_template.get()
-        lang = self.current_lang if self.current_lang in ("en", "pt") else "es"
-        data = PRESET_HOVER_DATA.get(lang, {}).get(curr_pid)
+        data = self.preset_details(curr_pid)
         if data and self.score_submode.get() == "template":
             pref = self.t("preset_active_pref")
             self.lbl_preset_hover_title.config(text=f"{pref} {data['title']} ({data['tier']})", fg=COLOR_BORDER_GLOW)
@@ -2017,6 +715,7 @@ class MegabonkHelperApp(tk.Tk):
             fg=t_info.get("color", COLOR_GOLD)
         )
         self.restore_preset_info()
+        self.update_preset_selection()
 
     def apply_preset_template(self, preset_id):
         tmpl = PRESET_TEMPLATES.get(preset_id)
@@ -2025,7 +724,7 @@ class MegabonkHelperApp(tk.Tk):
         self.score_submode.set("template")
         self.selected_template.set(preset_id)
         self.target_tier.set(tmpl["tier"])
-        name = tmpl["name"]
+        name = self.t(PRESET_KEYS[preset_id])
         tier = tmpl["tier"]
         min_score = tmpl["min_score"]
         self.lbl_preset_active.config(
@@ -2033,6 +732,7 @@ class MegabonkHelperApp(tk.Tk):
             fg=COLOR_GOLD
         )
         self.restore_preset_info()
+        self.update_preset_selection()
 
     def update_live_score_ui(self, stats):
         score = stats.get("score", 0.0)
@@ -2051,50 +751,55 @@ class MegabonkHelperApp(tk.Tk):
         )
 
     def switch_mode(self, mode):
+        if self.is_running or mode not in SEARCH_MODES:
+            return
         self.selected_mode.set(mode)
-        self.tab1_frame.pack_forget()
-        self.tab2_frame.pack_forget()
-        self.tab3_frame.pack_forget()
-        self.tab4_frame.pack_forget()
-
-        self.btn_tab1.config(bg=COLOR_CARD, fg=COLOR_TEXT_DIM)
-        self.btn_tab2.config(bg=COLOR_CARD, fg=COLOR_TEXT_DIM)
-        self.btn_tab3.config(bg=COLOR_CARD, fg=COLOR_TEXT_DIM)
-        self.btn_tab4.config(bg=COLOR_CARD, fg=COLOR_TEXT_DIM)
-
-        if mode == 1:
-            self.tab1_frame.pack(fill="both", expand=True)
-            self.btn_tab1.config(bg=COLOR_CARD_ALT, fg=COLOR_BORDER_GLOW)
-        elif mode == 2:
-            self.tab2_frame.pack(fill="both", expand=True)
-            self.btn_tab2.config(bg=COLOR_CARD_ALT, fg=COLOR_GOLD)
-            if hasattr(self, "tab2_canvas"):
-                self.tab2_canvas.yview_moveto(0)
-        elif mode == 3:
-            self.tab3_frame.pack(fill="both", expand=True)
-            self.btn_tab3.config(bg=COLOR_CARD_ALT, fg=COLOR_PURPLE)
-            if hasattr(self, "tab3_canvas"):
-                self.tab3_canvas.yview_moveto(0)
-        elif mode == 4:
-            self.tab4_frame.pack(fill="both", expand=True)
-            self.btn_tab4.config(bg=COLOR_CARD_ALT, fg=COLOR_GOLD)
+        tabs = {1: (self.tab1_frame, self.btn_tab1, COLOR_BORDER_GLOW),
+                2: (self.tab2_frame, self.btn_tab2, COLOR_GOLD),
+                4: (self.tab4_frame, self.btn_tab4, COLOR_GOLD)}
+        for frame, btn, _ in tabs.values():
+            frame.pack_forget()
+            btn.config(bg=COLOR_CARD, fg=COLOR_TEXT_DIM)
+        frame, btn, color = tabs[mode]
+        frame.pack(fill="both", expand=True)
+        btn.config(bg=COLOR_CARD_ALT, fg=color)
+        if mode == 4:
             self.update_tab4_items_label()
             self.update_tab4_golden_label()
             self.restore_preset_info()
-            if hasattr(self, "tab4_canvas"):
-                self.tab4_canvas.yview_moveto(0)
 
     def test_quick_reset(self):
-        connected = self.reader.find_process()
-        if not connected:
-            messagebox.showwarning(self.t("alert_game_not_found_title"), self.t("alert_game_not_found_msg"))
+        if self.is_running or self._testing_reset:
             return
+        self._testing_reset = True
+        self.btn_action.config(state="disabled")
+        self.btn_test_reset.config(state="disabled")
+        def worker():
+            try:
+                if not self.reader.find_process():
+                    self.safe_ui_update(messagebox.showwarning, self.t("alert_game_not_found_title"),
+                                        self.t("alert_game_not_found_msg"))
+                    return
+                # Clicking this button puts Helper in front; focus the game before
+                # the same PID guard used by the normal search sends any input.
+                focused = self.bot.focus_game(pid=self.reader.pid)
+                ok = focused and self.bot.trigger_restart(pid=self.reader.pid)
+                if ok:
+                    self.safe_ui_update(self.lbl_status.config, text=self.t("status_quick_reset_sent"), fg=COLOR_GREEN)
+                else:
+                    self.safe_ui_update(messagebox.showerror, self.t("alert_reset_error_title"),
+                                        self.t("alert_reset_error_msg"))
+            except Exception as exc:
+                log_event(f"Error al probar reinicio: {exc}", level="ERROR")
+                self.safe_ui_update(self.lbl_status.config, text=self.t("alert_reset_error_msg"), fg=COLOR_RED)
+            finally:
+                self.safe_ui_update(self._finish_test_reset)
+        threading.Thread(target=worker, daemon=True).start()
 
-        ok = self.bot.trigger_restart(pid=self.reader.pid)
-        if ok:
-            self.lbl_status.config(text=self.t("status_quick_reset_sent"), fg=COLOR_GREEN)
-        else:
-            messagebox.showerror(self.t("alert_reset_error_title"), self.t("alert_reset_error_msg"))
+    def _finish_test_reset(self):
+        self._testing_reset = False
+        self.btn_action.config(state="normal")
+        self.btn_test_reset.config(state="disabled" if self.is_running else "normal")
 
     def open_log_file(self):
         try:
@@ -2108,22 +813,28 @@ class MegabonkHelperApp(tk.Tk):
     # ATAJOS GLOBALES DE TECLADO (F5: BUSQUEDA, F6: OVERLAY POWERUPS)
     # ==========================================================
     def trigger_f5_action(self):
-        now = time.time()
-        if now - self._last_f5_time < 0.35:
-            return
-        self._last_f5_time = now
-        self.after(0, self.toggle_search)
+        with self._hotkey_lock:
+            now = time.monotonic()
+            if now - self._last_f5_time < 0.35:
+                return
+            self._last_f5_time = now
+        self.safe_ui_update(self.toggle_search)
 
     def trigger_f6_action(self):
-        now = time.time()
-        if now - self._last_f6_time < 0.35:
-            return
-        self._last_f6_time = now
-        self.after(0, self.toggle_powerup_overlay)
+        with self._hotkey_lock:
+            now = time.monotonic()
+            if now - self._last_f6_time < 0.35:
+                return
+            self._last_f6_time = now
+        self.safe_ui_update(self.toggle_powerup_overlay)
 
     def toggle_powerup_overlay(self):
         if hasattr(self, "powerup_overlay") and self.powerup_overlay:
             is_vis = self.powerup_overlay.toggle()
+            if is_vis:
+                self._overlay_enabled.set()
+            else:
+                self._overlay_enabled.clear()
             badge_text = "⚡ HUD [F6]: ON" if is_vis else "⚡ HUD [F6]: OFF"
             badge_fg = "#10B981" if is_vis else "#64748B"
             if hasattr(self, "btn_overlay_toggle") and self.btn_overlay_toggle:
@@ -2193,7 +904,7 @@ class MegabonkHelperApp(tk.Tk):
                 txt_audit.insert("1.0", report)
                 txt_audit.config(state="disabled")
 
-            dialog.after(0, update_text)
+            self.safe_ui_update(update_text)
 
         def copy_to_clipboard():
             try:
@@ -2263,7 +974,26 @@ class MegabonkHelperApp(tk.Tk):
         threading.Thread(target=run_audit_worker, daemon=True).start()
 
     def start_powerup_overlay_loop(self):
+        self._powerup_thread = threading.Thread(
+            target=self._powerup_reader_loop, daemon=True, name="PowerupReader"
+        )
+        self._powerup_thread.start()
         self._update_powerup_overlay_tick()
+
+    def _powerup_reader_loop(self):
+        while not self._closing_event.is_set():
+            delay = 0.25
+            if self._overlay_enabled.is_set():
+                try:
+                    data = self.reader.read_active_powerups()
+                    with self._powerup_lock:
+                        self._powerup_sample = (time.monotonic(), data)
+                    delay = 0.05 if data.get("powerups") else 0.1
+                    if not self.reader.handle:
+                        delay = 0.5
+                except Exception as exc:
+                    log_event(f"Lectura del HUD fallida: {exc}", level="WARN")
+            self._closing_event.wait(delay)
 
     def _update_powerup_overlay_tick(self):
         if self.is_closing:
@@ -2272,10 +1002,9 @@ class MegabonkHelperApp(tk.Tk):
         try:
             overlay = getattr(self, "powerup_overlay", None)
             if overlay and overlay.is_visible:
-                if not self.reader.handle:
-                    self.reader.find_process()
-                if self.reader.handle and self.reader.ga_base:
-                    data = self.reader.read_active_powerups()
+                with self._powerup_lock:
+                    sampled_at, data = self._powerup_sample
+                if data and time.monotonic() - sampled_at < 1.0:
                     has_powerups = bool(data and data.get("powerups"))
                     overlay.update_data(data)
                     # Si no hay powerups activos (00:00), sondeo a 10 Hz (100ms) para 0 impacto CPU/DWM
@@ -2292,13 +1021,6 @@ class MegabonkHelperApp(tk.Tk):
         self.after(next_delay, self._update_powerup_overlay_tick)
 
     def start_hotkey_listener(self):
-        if keyboard is not None:
-            try:
-                keyboard.add_hotkey("f5", self.trigger_f5_action, suppress=False)
-                keyboard.add_hotkey("f6", self.trigger_f6_action, suppress=False)
-            except Exception:
-                pass
-
         t = threading.Thread(target=self.hotkey_listener_loop, daemon=True)
         t.start()
 
@@ -2336,10 +1058,23 @@ class MegabonkHelperApp(tk.Tk):
     def safe_ui_update(self, func, *args, **kwargs):
         if self.is_closing:
             return
-        try:
-            self.after(0, lambda: func(*args, **kwargs))
-        except Exception:
-            pass
+        self._ui_queue.put((func, args, kwargs))
+
+    def _drain_ui_queue(self):
+        if self.is_closing:
+            return
+        for _ in range(100):
+            try:
+                func, args, kwargs = self._ui_queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                func(*args, **kwargs)
+            except tk.TclError:
+                pass  # The target dialog may have been closed in the meantime.
+            except Exception as exc:
+                log_event(f"Error al actualizar la interfaz: {exc}", level="ERROR")
+        self.after(20, self._drain_ui_queue)
 
     def monitor_loop(self):
         while not self.is_closing:
@@ -2399,36 +1134,25 @@ class MegabonkHelperApp(tk.Tk):
     def toggle_search(self):
         if self.is_running:
             self.stop_search(self.t("status_stopped_user"))
-            try:
-                kernel32.Beep(600, 150)
-            except Exception:
-                pass
         else:
-            if self.start_search():
-                try:
-                    kernel32.Beep(1200, 150)
-                except Exception:
-                    pass
+            self.start_search()
 
     def start_search(self):
+        if self._testing_reset:
+            return False
         mode = self.selected_mode.get()
+        try:
+            config = capture_configuration(self)
+        except ValueError as exc:
+            self.lbl_status.config(text=str(exc), fg=COLOR_RED)
+            return False
         if mode == 1 and not self.selected_items:
-            try:
-                kernel32.Beep(400, 180)
-                kernel32.Beep(400, 180)
-            except Exception:
-                pass
             msg = "Debes seleccionar al menos 1 item en el Modo 1 antes de iniciar la busqueda." if self.current_lang == "es" else "You must select at least 1 item in Mode 1 before starting search."
             self.lbl_status.config(text=f"⚠️ {msg}", fg="#EF4444")
             self.lift()
             return False
 
         if mode == 4 and self.require_mode1_items.get() and not self.selected_items:
-            try:
-                kernel32.Beep(400, 180)
-                kernel32.Beep(400, 180)
-            except Exception:
-                pass
             msg = self.t("alert_combo_no_items_msg")
             self.lbl_status.config(text=f"⚠️ {msg}", fg="#EF4444")
             self.lift()
@@ -2450,7 +1174,7 @@ class MegabonkHelperApp(tk.Tk):
                 self.consecutive_slow_reloads = 0
                 self.recent_reloads = []
 
-        self.is_running = True
+        self._search_config = config
         self.attempt_count = 1
         self.start_time = time.time()
         self.match_found = False
@@ -2467,8 +1191,7 @@ class MegabonkHelperApp(tk.Tk):
         self.generation_seen = False
         if self.reader:
             # Optimización de arranque: mantener y precalentar el heap para que el Intento #1 sea tan rápido como el #2 (< 90ms)
-            if not self.reader._cached_heap_regions:
-                self.reader.refresh_cached_heap_regions()
+            # Heap warming belongs to the background monitor, never the Tk thread.
             self.reader._cached_vendor_regions = []
             self.reader._cached_microwave_regions = []
             self.reader.set_high_priority(True)
@@ -2483,6 +1206,8 @@ class MegabonkHelperApp(tk.Tk):
             activebackground="#B91C1C"
         )
         self.lbl_status.config(text=self.t("status_running"), fg=COLOR_BORDER_GLOW)
+        self.set_menu_editable(False)
+        self.is_running = True
 
         # Feedback sonoro al iniciar búsqueda F5
         try:
@@ -2500,7 +1225,7 @@ class MegabonkHelperApp(tk.Tk):
                     n = pt_n if self.current_lang == "pt" else (en_n if self.current_lang == "en" else es_n)
                     p_var = self.item_max_prices.get(tid)
                     p_val = p_var.get().strip() if hasattr(p_var, "get") else str(p_var or "").strip()
-                    if p_val and p_val.isdigit() and int(p_val) > 0:
+                    if p_val and p_val.isascii() and p_val.isdecimal() and len(p_val) <= 9 and int(p_val) > 0:
                         i_desc.append(f"{n} (≤{p_val}g)")
                     else:
                         i_desc.append(n)
@@ -2515,7 +1240,7 @@ class MegabonkHelperApp(tk.Tk):
                 n = pt_n if self.current_lang == "pt" else (en_n if self.current_lang == "en" else es_n)
                 p_var = self.item_max_prices.get(tid)
                 p_val = p_var.get().strip() if hasattr(p_var, "get") else str(p_var or "").strip()
-                if p_val and p_val.isdigit() and int(p_val) > 0:
+                if p_val and p_val.isascii() and p_val.isdecimal() and len(p_val) <= 9 and int(p_val) > 0:
                     item_desc.append(f"{n} (≤{p_val}g)")
                 else:
                     item_desc.append(n)
@@ -2526,6 +1251,7 @@ class MegabonkHelperApp(tk.Tk):
 
     def stop_search(self, msg=""):
         self.is_running = False
+        self.safe_ui_update(self.set_menu_editable, True)
         if self.reader:
             self.reader.set_high_priority(False)
         self.last_reroll_time = None
@@ -2533,7 +1259,7 @@ class MegabonkHelperApp(tk.Tk):
         self._logged_item_timing = False
         self.waiting_for_scene_reload = False
         self.saw_zero_interactables = False
-        self.btn_action.config(
+        self.safe_ui_update(self.btn_action.config,
             text=self.t("btn_start"),
             bg="#0284C7",
             activebackground="#0369A1"
@@ -2546,7 +1272,7 @@ class MegabonkHelperApp(tk.Tk):
             pass
 
         if msg:
-            self.lbl_status.config(text=msg, fg=COLOR_TEXT)
+            self.safe_ui_update(self.lbl_status.config, text=msg, fg=COLOR_TEXT)
             log_event(f"Búsqueda detenida: {msg}", level="STOP")
         else:
             log_event("Búsqueda detenida por el usuario.", level="STOP")
@@ -2584,7 +1310,7 @@ class MegabonkHelperApp(tk.Tk):
                 text=f"⚠️ {self.t('alert_restart_required_title')}",
                 fg="#EF4444"
             )
-            self.after(0, lambda: messagebox.showwarning(
+            self.safe_ui_update(lambda: messagebox.showwarning(
                 self.t("alert_restart_required_title"),
                 msg
             ))
@@ -2603,11 +1329,21 @@ class MegabonkHelperApp(tk.Tk):
             fg=COLOR_BORDER_GLOW
         )
         self.last_reroll_time = time.time()
+        self._reroll_started_at = time.perf_counter()
         self.current_map_detected_time = None
         if self.reader:
             self.reader._cached_vendor_regions = []
             self.reader._cached_microwave_regions = []
-        self.bot.trigger_restart(pid=self.reader.pid)
+        sent = self.bot.trigger_restart(pid=self.reader.pid)
+        self._last_reset_input_ms = (time.perf_counter() - self._reroll_started_at) * 1000
+        if not sent:
+            self.waiting_for_scene_reload = False
+            self.last_reroll_time = None
+            msg = {"es": "No se pudo enviar R: comprobá el foco y el reinicio rápido del juego.",
+                   "en": "Could not send R: check game focus and quick reset settings.",
+                   "pt": "Não foi possível enviar R: confira o foco e o reinício rápido do jogo."}
+            log_event(msg.get(self.current_lang, msg["es"]), level="WARN")
+            self.stop_search(msg.get(self.current_lang, msg["es"]))
 
     def handle_target_found(self, stats, vendors=None):
         self.match_found = True
@@ -2632,7 +1368,8 @@ class MegabonkHelperApp(tk.Tk):
 
         # 1. PAUSA DE SEGURIDAD AFK INMEDIATA (lo primero en ejecutarse para proteger al jugador)
         try:
-            self.bot.trigger_afk_safety_pause(pid=self.reader.pid)
+            if not self.bot.trigger_afk_safety_pause(pid=self.reader.pid):
+                log_event("No se pudo confirmar la pulsación de pausa AFK", level="WARN")
         except Exception as e:
             log_event(f"Error al activar pausa de seguridad: {e}", level="WARN")
 
@@ -2675,7 +1412,7 @@ class MegabonkHelperApp(tk.Tk):
                 self.is_focus_paused = False
                 log_event("Megabonk en primer plano. Reanudando búsqueda...", level="RESUME")
 
-        mode = self.selected_mode.get()
+        mode = search_setting(self, 'selected_mode')
         # Verificación ultrarrápida del estado de la partida (< 1ms). CERO escaneo de heap durante carga/reset.
         data = self.reader.get_full_map_data(scan_vendors=False)
         stats = data.get("stats", {})
@@ -2717,13 +1454,14 @@ class MegabonkHelperApp(tk.Tk):
                 # 2) Unity no está en pantalla de carga (not is_loading)
                 # 3) Tiene un mapa y fase instanciados (has_loaded_map)
                 # 4) Pasó el tiempo físico mínimo de fade (mínimo 1.10s)
-                # 5) Se observó la fase de generación/vaciado (generation_seen o saw_zero_interactables)
-                # 6) La semilla cambió respecto a la partida anterior
+                # 5) Hay evidencia de transición: carga/vaciado observado o semilla distinta
                 if time_since_reroll < 1.10:
                     return
 
-                if not (self.generation_seen or self.saw_zero_interactables):
-                    # Todavía estamos viendo los interactuables de la partida vieja antes de que empiece a recargar!
+                definite_seed_change = (current_seed is not None and self.last_seed is not None
+                                        and current_seed != self.last_seed)
+                if not (self.generation_seen or self.saw_zero_interactables or definite_seed_change):
+                    # Sin transición observada ni semilla nueva, podría ser el mapa anterior.
                     return
 
                 seed_changed = False
@@ -2736,6 +1474,12 @@ class MegabonkHelperApp(tk.Tk):
                     # Monitoreo de salud/rendimiento de recarga tras partidas largas
                     reload_dur = (now - self.last_reroll_time) if self.last_reroll_time else 0.0
                     self._check_reload_performance(reload_dur)
+                    reset_started = getattr(self, "_reroll_started_at", None)
+                    if reset_started is not None:
+                        ready_ms = (time.perf_counter() - reset_started) * 1000
+                        input_ms = getattr(self, "_last_reset_input_ms", 0.0)
+                        log_event(f"Recarga #{self.attempt_count}: R={input_ms:.1f}ms, "
+                                  f"mapa_listo={ready_ms:.1f}ms, semilla_cambio={seed_changed}", level="PERF")
 
                     self.waiting_for_scene_reload = False
                     self.saw_zero_interactables = False
@@ -2817,7 +1561,7 @@ class MegabonkHelperApp(tk.Tk):
                 level="MATCH"
             )
 
-            needs_vendors = (self.require_mode1_items.get() and self.selected_items) or self.require_golden_vendors.get()
+            needs_vendors = (search_setting(self, 'require_mode1_items') and search_setting(self, 'selected_items')) or search_setting(self, 'require_golden_vendors')
             vendors = []
             if needs_vendors:
                 self.safe_ui_update(
@@ -2840,8 +1584,8 @@ class MegabonkHelperApp(tk.Tk):
                     return
 
                 # Pre-filtro instantáneo de dorados
-                if self.require_golden_vendors.get():
-                    target_gold = self.target_golden_vendors.get()
+                if search_setting(self, 'require_golden_vendors'):
+                    target_gold = search_setting(self, 'target_golden_vendors')
                     if num_map_vendors < target_gold:
                         log_event(f"-> La plantilla era {tier_val} pero faltan Vendedores Dorados (hay {num_map_vendors}/{target_gold}). Reiniciando...", level="REROLL")
                         self.safe_ui_update(
@@ -2852,7 +1596,7 @@ class MegabonkHelperApp(tk.Tk):
                         self.trigger_reroll_step()
                         return
 
-                needs_items = self.require_mode1_items.get() and self.selected_items
+                needs_items = search_setting(self, 'require_mode1_items') and search_setting(self, 'selected_items')
                 time_since_map = (now - self.current_map_detected_time) if self.current_map_detected_time else 0.0
 
                 # Grace period reactivo breve (0.05s) para escaneo ultra-temprano
@@ -2880,8 +1624,8 @@ class MegabonkHelperApp(tk.Tk):
                 log_event(f"Vendedores encontrados ({len(vendors)}): {' | '.join(v_desc)}", level="EVAL")
 
                 # 1. Comprobar Vendedores Dorados si está marcado
-                if self.require_golden_vendors.get():
-                    target_gold = self.target_golden_vendors.get()
+                if search_setting(self, 'require_golden_vendors'):
+                    target_gold = search_setting(self, 'target_golden_vendors')
                     curr_gold = sum(1 for v in vendors if v.get("is_golden", False))
                     if curr_gold < target_gold:
                         log_event(f"-> La plantilla era {tier_val} pero faltan Vendedores Dorados (hay {curr_gold}/{target_gold}). Reiniciando...", level="REROLL")
@@ -2895,7 +1639,7 @@ class MegabonkHelperApp(tk.Tk):
 
                 # 2. Comprobar Items de Modo 1 si está marcado
                 if needs_items:
-                    has_items, price_reason = self.check_vendors_have_items(vendors, self.selected_items)
+                    has_items, price_reason = self.check_vendors_have_items(vendors, search_setting(self, 'selected_items'))
                     if not has_items:
                         if price_reason:
                             log_event(f"-> La plantilla era {tier_val} pero supera precio máx: {price_reason}. Reiniciando...", level="REROLL")
@@ -2924,8 +1668,8 @@ class MegabonkHelperApp(tk.Tk):
         elif mode == 1:
             num_map_vendors = stats.get("vendors_total", 0)
             # Pre-filtro instantáneo en < 0.1ms: si el mapa no tiene suficientes vendedores
-            if num_map_vendors < len(self.selected_items):
-                log_event(f"Intento #{self.attempt_count}: Mapa solo tiene {num_map_vendors} vendedores (pedidos {len(self.selected_items)}). Reiniciando...", level="REROLL")
+            if num_map_vendors < len(search_setting(self, 'selected_items')):
+                log_event(f"Intento #{self.attempt_count}: Mapa solo tiene {num_map_vendors} vendedores (pedidos {len(search_setting(self, 'selected_items'))}). Reiniciando...", level="REROLL")
                 self.trigger_reroll_step()
                 return
 
@@ -2957,7 +1701,7 @@ class MegabonkHelperApp(tk.Tk):
 
             # Éxito temprano: si los vendedores que ya cargaron ya tienen los objetos requeridos y cumplen precio, terminar de inmediato!
             if vendors:
-                has_items_early, _ = self.check_vendors_have_items(vendors, self.selected_items)
+                has_items_early, _ = self.check_vendors_have_items(vendors, search_setting(self, 'selected_items'))
                 if has_items_early:
                     if not self._logged_item_timing:
                         self._logged_item_timing = True
@@ -2979,7 +1723,7 @@ class MegabonkHelperApp(tk.Tk):
                     return
                 # Si tras 450ms aún falta algún vendedor pero los cargados ya tienen el objeto y cumplen precio, éxito inmediato!
                 if vendors:
-                    has_items_timeout, _ = self.check_vendors_have_items(vendors, self.selected_items)
+                    has_items_timeout, _ = self.check_vendors_have_items(vendors, search_setting(self, 'selected_items'))
                     if has_items_timeout:
                         log_event(f"⭐ ¡OBJETOS ENCONTRADOS! Intento #{self.attempt_count}", level="SUCCESS")
                         self.handle_target_found(stats, vendors)
@@ -2996,7 +1740,7 @@ class MegabonkHelperApp(tk.Tk):
                 self._logged_item_timing = True
                 log_event(f"⏱️ Objetos de vendedores cargados en {int(time_since_map * 1000)}ms (Intento #{self.attempt_count}).", level="INFO")
 
-            has_items, price_reason = self.check_vendors_have_items(vendors, self.selected_items)
+            has_items, price_reason = self.check_vendors_have_items(vendors, search_setting(self, 'selected_items'))
             if not has_items:
                 if price_reason:
                     log_event(f"Intento #{self.attempt_count}: Objeto encontrado pero supera precio máx: {price_reason}. Reiniciando...", level="REROLL")
@@ -3014,7 +1758,7 @@ class MegabonkHelperApp(tk.Tk):
         # =========================================================================
         elif mode == 2:
             num_map_vendors = stats.get("vendors_total", 0)
-            target_gold = self.target_golden_vendors.get()
+            target_gold = search_setting(self, 'target_golden_vendors')
             if num_map_vendors < target_gold:
                 log_event(f"Intento #{self.attempt_count}: Mapa solo tiene {num_map_vendors} vendedores (pedidos {target_gold} dorados). Reiniciando...", level="REROLL")
                 self.trigger_reroll_step()
@@ -3036,24 +1780,6 @@ class MegabonkHelperApp(tk.Tk):
 
             log_event(f"⭐ ¡VENDEDORES DORADOS ENCONTRADOS ({golden_count}/{target_gold})! Intento #{self.attempt_count}", level="SUCCESS")
             self.handle_target_found(stats, vendors)
-            return
-
-        # =========================================================================
-        # CASO D: MODO 3 (Filtros Ultra)
-        # =========================================================================
-        elif mode == 3:
-            data = self.reader.get_full_map_data(scan_vendors=False)
-            stats = data.get("stats", {})
-            self.safe_ui_update(self.update_live_score_ui, stats)
-
-            match = self.evaluate_simple_match(mode, stats)
-            if not match:
-                log_event(f"Intento #{self.attempt_count}: No cumple filtros de Modo 3. Reiniciando...", level="REROLL")
-                self.trigger_reroll_step()
-                return
-
-            log_event(f"⭐ ¡OBJETIVO ALCANZADO en Modo 3! Intento #{self.attempt_count}", level="SUCCESS")
-            self.handle_target_found(stats, [])
             return
 
     def check_vendors_have_items(self, vendors, selected_items):
@@ -3081,7 +1807,7 @@ class MegabonkHelperApp(tk.Tk):
             tid = s[0]
             name = s[4] if self.current_lang == "pt" else (s[3] if self.current_lang == "en" else s[2])
             target_names[tid] = name
-            p_var = self.item_max_prices.get(tid)
+            p_var = search_setting(self, 'item_max_prices').get(tid)
             val_str = p_var.get().strip() if hasattr(p_var, "get") else str(p_var or "").strip()
             if val_str and val_str.isdigit() and int(val_str) > 0:
                 max_prices[tid] = int(val_str)
@@ -3094,7 +1820,9 @@ class MegabonkHelperApp(tk.Tk):
             v_dict = {}
             for idx, i_id in enumerate(v_ids):
                 price = v_prices[idx] if idx < len(v_prices) else 0
-                v_dict[i_id] = price
+                previous = v_dict.get(i_id)
+                if previous is None or (price > 0 and (previous <= 0 or price < previous)):
+                    v_dict[i_id] = price
             vendor_maps.append(v_dict)
 
         items_matched_any = False
@@ -3122,7 +1850,11 @@ class MegabonkHelperApp(tk.Tk):
                 price_limit = max_prices.get(tid)
                 if price_limit:
                     actual_price = vendor_maps[vendor_perm[i]][tid]
-                    if actual_price > 0 and actual_price > price_limit:
+                    if actual_price <= 0:
+                        price_ok = False
+                        unknown_price = {"es": "precio sin confirmar", "en": "price unavailable", "pt": "preço não confirmado"}
+                        perm_overprices.append(f"{target_names[tid]}: {unknown_price.get(self.current_lang, unknown_price['es'])}")
+                    elif actual_price > price_limit:
                         price_ok = False
                         perm_overprices.append(f"{target_names[tid]}: {actual_price}g > {price_limit}g")
 
@@ -3156,7 +1888,7 @@ class MegabonkHelperApp(tk.Tk):
         return f"⚪{white_count}/{total_expected}: {', '.join(breakdown_parts)}"
 
     def evaluate_template_match(self, stats):
-        submode = self.score_submode.get()
+        submode = search_setting(self, 'score_submode')
         current_score = stats.get("score", 0.0)
         current_tier = stats.get("tier", "Normal")
         microwaves = stats.get("microwaves", 0)
@@ -3167,11 +1899,11 @@ class MegabonkHelperApp(tk.Tk):
         tier_priority = {"Normal": 0, "Light": 1, "Good": 2, "Perfect": 3, "Perfect+": 4}
 
         if submode == "tier":
-            target_tier = self.target_tier.get()
+            target_tier = search_setting(self, 'target_tier')
             return (tier_priority.get(current_tier, 0) >= tier_priority.get(target_tier, 0))
 
         elif submode == "template":
-            tmpl_id = self.selected_template.get()
+            tmpl_id = search_setting(self, 'selected_template')
             tmpl = PRESET_TEMPLATES.get(tmpl_id, {})
             if not tmpl:
                 return False
@@ -3211,34 +1943,12 @@ class MegabonkHelperApp(tk.Tk):
 
         return False
 
-    def evaluate_simple_match(self, mode, stats):
-        if mode == 2:
-            target_count = self.target_golden_vendors.get()
-            current_golden = stats.get("vendors_golden", 0)
-            return (current_golden >= target_count)
-        elif mode == 3:
-            for key, f in self.ultra_filters.items():
-                if f["active"].get():
-                    min_req = f["min_val"].get()
-                    if key == "microwaves_white":
-                        curr = stats.get("microwaves_white")
-                        if curr is None:
-                            if stats.get("microwaves", 0) < min_req:
-                                return False
-                            target_to_scan = max(stats.get("microwaves", 0), min_req)
-                            micros_found = self.reader.scan_microwaves(expected_count=target_to_scan)
-                            curr = sum(1 for m in micros_found if m.get("is_white", False))
-                            stats["microwaves_white"] = curr
-                            stats["microwaves_detail"] = self.format_microwave_details(micros_found, stats.get("microwaves", 0))
-                    else:
-                        curr = stats.get(key, 0)
-                    if curr < min_req:
-                        return False
-            return True
-        return False
-
 MBHelperApp = MegabonkHelperApp
 
 if __name__ == "__main__":
-    app = MBHelperApp()
-    app.mainloop()
+    if len(sys.argv) == 3 and sys.argv[1] == "--check-build":
+        from release_checks import run_build_check
+        raise SystemExit(run_build_check(MBHelperApp, sys.argv[2]))
+    else:
+        app = MBHelperApp()
+        app.mainloop()

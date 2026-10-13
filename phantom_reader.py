@@ -12,6 +12,7 @@ import os
 import time
 import threading
 import math
+from functools import wraps
 
 PROCESS_VM_READ = 0x0010
 PROCESS_QUERY_INFORMATION = 0x0400
@@ -94,6 +95,45 @@ class PROCESS_MEMORY_COUNTERS_EX(ctypes.Structure):
         ('PeakPagefileUsage', ctypes.c_size_t),
         ('PrivateUsage', ctypes.c_size_t),
     ]
+
+# ctypes defaults to a 32-bit int return value. HANDLEs and SIZE_Ts must
+# retain all their bits on x64, including INVALID_HANDLE_VALUE.
+kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+kernel32.OpenProcess.restype = wintypes.HANDLE
+kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+kernel32.CloseHandle.restype = wintypes.BOOL
+kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+kernel32.ReadProcessMemory.argtypes = [
+    wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_size_t),
+]
+kernel32.ReadProcessMemory.restype = wintypes.BOOL
+kernel32.VirtualQueryEx.argtypes = [
+    wintypes.HANDLE, ctypes.c_void_p, ctypes.POINTER(MEMORY_BASIC_INFORMATION64), ctypes.c_size_t,
+]
+kernel32.VirtualQueryEx.restype = ctypes.c_size_t
+kernel32.SetPriorityClass.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+kernel32.SetPriorityClass.restype = wintypes.BOOL
+kernel32.GetPriorityClass.argtypes = [wintypes.HANDLE]
+kernel32.GetPriorityClass.restype = wintypes.DWORD
+for _name, _entry in (("Process32FirstW", PROCESSENTRY32W), ("Process32NextW", PROCESSENTRY32W),
+                      ("Module32FirstW", MODULEENTRY32W), ("Module32NextW", MODULEENTRY32W)):
+    _fn = getattr(kernel32, _name)
+    _fn.argtypes = [wintypes.HANDLE, ctypes.POINTER(_entry)]
+    _fn.restype = wintypes.BOOL
+
+INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+
+def synchronized(method):
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self._mem_lock:
+            return method(self, *args, **kwargs)
+    return wrapped
 
 try:
     psapi = ctypes.WinDLL('psapi', use_last_error=True)
@@ -365,10 +405,18 @@ class PhantomMemoryReader:
         self._cached_time_offset = MY_TIME_CURRENT_TIME_OFFSET
         self._last_match_time = 0.0
         self._mem_lock = threading.RLock()
+        self._original_priority = None
 
+    @synchronized
     def find_process(self):
+        # Avoid a complete process enumeration for every HUD/bot tick.
+        if self.handle:
+            exit_code = wintypes.DWORD()
+            if kernel32.GetExitCodeProcess(self.handle, ctypes.byref(exit_code)) and exit_code.value == 259:
+                return bool(self.ga_base) or self.find_modules()
+            self.close()
         snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
-        if snapshot == -1:
+        if snapshot in (None, INVALID_HANDLE_VALUE):
             return False
 
         pe = PROCESSENTRY32W()
@@ -412,21 +460,33 @@ class PhantomMemoryReader:
 
         return self.find_modules()
 
+    @synchronized
     def set_high_priority(self, enable=True):
-        """Asigna HIGH_PRIORITY_CLASS a Megabonk para forzar ejecucion en P-cores de alta frecuencia."""
+        """Ajusta la prioridad temporalmente y restaura el valor previo."""
         if not self.handle:
             return False
         try:
-            priority = HIGH_PRIORITY_CLASS if enable else NORMAL_PRIORITY_CLASS
-            return bool(kernel32.SetPriorityClass(self.handle, priority))
+            if enable:
+                if self._original_priority is None:
+                    self._original_priority = kernel32.GetPriorityClass(self.handle) or None
+                if self._original_priority is None:
+                    return False
+                return bool(kernel32.SetPriorityClass(self.handle, HIGH_PRIORITY_CLASS))
+            if self._original_priority is None:
+                return True
+            restored = bool(kernel32.SetPriorityClass(self.handle, self._original_priority))
+            if restored:
+                self._original_priority = None
+            return restored
         except Exception:
             return False
 
+    @synchronized
     def find_modules(self):
         if not self.pid or not self.handle:
             return False
         snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, self.pid)
-        if snapshot == -1:
+        if snapshot in (None, INVALID_HANDLE_VALUE):
             return False
 
         me = MODULEENTRY32W()
@@ -443,9 +503,11 @@ class PhantomMemoryReader:
         kernel32.CloseHandle(snapshot)
         return self.ga_base is not None
 
+    @synchronized
     def close(self):
         if self.handle:
             try:
+                self.set_high_priority(False)
                 kernel32.CloseHandle(self.handle)
             except Exception:
                 pass
@@ -462,6 +524,7 @@ class PhantomMemoryReader:
         self._cached_powerup_dict = None
         self._cached_time_static = None
         self._last_match_time = 0.0
+        self._original_priority = None
 
 
     def read_bytes(self, address, size):
@@ -743,6 +806,7 @@ class PhantomMemoryReader:
 
         return None
 
+    @synchronized
     def get_map_generation_state(self):
         """
         Lee el estado de generacion, carga y semilla de Megabonk (metodo BonkScanner).
@@ -792,6 +856,7 @@ class PhantomMemoryReader:
 
         return result
 
+    @synchronized
     def get_process_memory_mb(self):
         """Retorna (working_set_mb, private_usage_mb) del proceso de Megabonk."""
         if not self.handle or not psapi:
@@ -832,6 +897,7 @@ class PhantomMemoryReader:
             pass
         return False
 
+    @synchronized
     def read_game_lifecycle(self):
         """Retorna {'in_game': bool, 'is_playing': bool, 'is_game_over': bool}"""
         state = {"in_game": False, "is_playing": False, "is_game_over": False}
@@ -855,6 +921,7 @@ class PhantomMemoryReader:
         state["in_game"] = self.is_in_game()
         return state
 
+    @synchronized
     def read_interactables_status(self):
         """Lee el diccionario nativo InteractablesStatus.interactablesByName"""
         result = {
@@ -975,6 +1042,7 @@ class PhantomMemoryReader:
                 self._cached_heap_regions = new_heap_regions
             return self._cached_heap_regions
 
+    @synchronized
     def scan_shady_vendors(self, expected_count=3, force_rescan=False):
         """Escanea la memoria para encontrar los vendedores (InteractableShadyGuy) y sus items ofrecidos"""
         vendors = []
@@ -1193,6 +1261,7 @@ class PhantomMemoryReader:
 
         return vendors
 
+    @synchronized
     def scan_microwaves(self, expected_count=2, force_rescan=False):
         """
         Escanea la memoria para encontrar instancias activas de InteractableMicrowave y su rareza real.
@@ -1375,6 +1444,7 @@ class PhantomMemoryReader:
         candidate_instances.sort(key=lambda c: (1 if c.get('has_coords') else 0, c.get('ptr', 0)), reverse=True)
         return candidate_instances[:target_count]
 
+    @synchronized
     def read_full_player_stats(self):
         """
         Lee en < 0.1ms las 27 estadísticas completas de combate y progresión, nivel, oro,
@@ -1384,13 +1454,14 @@ class PhantomMemoryReader:
             "valid": False,
             "run_time": 0.0,
             "stage_time": 0.0,
-            "level": 1,
+            "level": 0,
             "gold": 0,
             "kills": 0,
             "chests": 0,
             "character_id": 0,
             "is_game_over": False,
             "is_playing": False,
+            "in_game": False,
             "stats": {},
             "items": {},
             "weapons": [],
@@ -1403,20 +1474,28 @@ class PhantomMemoryReader:
         lifecycle = self.read_game_lifecycle()
         result["is_game_over"] = lifecycle.get("is_game_over", False)
         result["is_playing"] = lifecycle.get("is_playing", False)
+        result["in_game"] = lifecycle.get("in_game", False)
+        if not result["in_game"] and not result["is_game_over"]:
+            return result
 
         with self._mem_lock:
             try:
                 # 1. Tiempos de partida (MyTime)
+                time_static = None
                 time_class = self.read_ptr(self.ga_base + RVA_RUN_TIMER_TYPEINFO)
                 if time_class and not (time_class <= 0xFFFFFFFF and (time_class & 0xE0000000) == 0x20000000):
                     time_static = self.read_ptr(time_class + 0xB8)
                     if time_static:
                         st = self.read_float(time_static + 0x1C)
                         rt = self.read_float(time_static + 0x20)
-                        if rt is not None and math.isfinite(rt):
+                        if rt is not None and math.isfinite(rt) and rt >= 0:
                             result["run_time"] = round(max(0.0, rt), 2)
+                        else:
+                            return result
                         if st is not None and math.isfinite(st):
                             result["stage_time"] = round(max(0.0, st), 2)
+                if not time_static:
+                    return result
 
                 # 2. Player Stats Root & OwnerStats
                 stats_class = self.read_ptr(self.ga_base + RVA_PLAYER_STATS_TYPEINFO)
@@ -1466,7 +1545,7 @@ class PhantomMemoryReader:
                     pxp = self.read_ptr(player_inv + PLAYER_STATS_XP_OFFSET)
                     if pxp:
                         lvl = self.read_int32(pxp + PLAYER_STATS_XP_LEVEL_OFFSET)
-                        if lvl is not None and lvl >= 1:
+                        if lvl is not None and lvl >= 0:
                             result["level"] = lvl
 
                     # Oro actual
@@ -1560,7 +1639,7 @@ class PhantomMemoryReader:
                                                 elif key_str == "chests":
                                                     result["chests"] = max(0, int(val_f))
 
-                if result["stats"]:
+                if result["stats"] and time_class and time_static:
                     result["valid"] = True
             except Exception:
                 pass
@@ -1589,19 +1668,22 @@ class PhantomMemoryReader:
         with self._mem_lock:
             try:
                 # 1. Tiempo actual de juego (MyTime RVA 0x2F62398)
-                cur_time = 0.0
+                cur_time = None
                 time_class = self.read_ptr(self.ga_base + RVA_RUN_TIMER_TYPEINFO)
                 if not time_class or (time_class <= 0xFFFFFFFF and (time_class & 0xE0000000) == 0x20000000):
-                    time_class = self.resolve_class_ptr("MyTime")
+                    time_class = self.resolve_class_ptr("MyTime") if debug else None
 
                 if time_class and time_class > 0xFFFFFFFF:
                     time_static = self.read_ptr(time_class + 0xB8)
                     if time_static and time_static > 0xFFFFFFFF:
-                        for off in [MY_TIME_CURRENT_TIME_OFFSET, 0x1C, 0x20]:
-                            t_val = self.read_float(time_static + off)
-                            if t_val is not None and math.isfinite(t_val) and t_val > 0:
-                                cur_time = t_val
-                                break
+                        # end_time uses MyTime.time; stage/run timers have a
+                        # different origin and cannot safely substitute for it.
+                        t_val = self.read_float(time_static + MY_TIME_CURRENT_TIME_OFFSET)
+                        if t_val is not None and math.isfinite(t_val) and t_val >= 0:
+                            cur_time = t_val
+
+                if cur_time is None:
+                    return result
 
                 result["current_time"] = round(cur_time, 2)
 
@@ -1611,7 +1693,7 @@ class PhantomMemoryReader:
                 # Estrategia Primaria (Verificada): PlayerStats -> OwnerStats -> PlayerInventory -> PlayerStatusEffects
                 stats_class = self.read_ptr(self.ga_base + RVA_PLAYER_STATS_TYPEINFO)
                 if not stats_class or (stats_class <= 0xFFFFFFFF and (stats_class & 0xE0000000) == 0x20000000):
-                    stats_class = self.resolve_class_ptr("PlayerStats")
+                    stats_class = self.resolve_class_ptr("PlayerStats") if debug else None
 
                 if stats_class and stats_class > 0xFFFFFFFF:
                     stats_static = self.read_ptr(stats_class + 0xB8)
@@ -1630,7 +1712,7 @@ class PhantomMemoryReader:
                 if not player_effects:
                     player_class = self.read_ptr(self.ga_base + RVA_MY_PLAYER_TYPEINFO)
                     if not player_class or (player_class <= 0xFFFFFFFF and (player_class & 0xE0000000) == 0x20000000):
-                        player_class = self.resolve_class_ptr("MyPlayer")
+                        player_class = self.resolve_class_ptr("MyPlayer") if debug else None
 
                     if player_class and player_class > 0xFFFFFFFF:
                         player_static = self.read_ptr(player_class + 0xB8)
@@ -1729,6 +1811,7 @@ class PhantomMemoryReader:
 
         return result
 
+    @synchronized
     def get_full_map_data(self, scan_vendors=True):
         """Metodo maestro que devuelve todo el estado actual del mapa"""
         connected = self.find_process()
@@ -1973,4 +2056,3 @@ if __name__ == "__main__":
     print("Probando conexion con Megabonk...")
     data = reader.get_full_map_data()
     print("Resultado:", data)
-

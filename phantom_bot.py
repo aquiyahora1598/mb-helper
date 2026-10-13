@@ -9,6 +9,7 @@ from ctypes import wintypes
 import time
 import os
 import json
+import math
 
 try:
     import keyboard
@@ -64,6 +65,29 @@ class INPUT(ctypes.Structure):
         ('u', INPUT_UNION)
     ]
 
+user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
+user32.FindWindowW.restype = wintypes.HWND
+user32.GetForegroundWindow.argtypes = []
+user32.GetForegroundWindow.restype = wintypes.HWND
+user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+user32.GetWindowTextLengthW.restype = ctypes.c_int
+user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+user32.GetWindowTextW.restype = ctypes.c_int
+for _name in ("IsWindowVisible", "SetForegroundWindow", "BringWindowToTop"):
+    getattr(user32, _name).argtypes = [wintypes.HWND]
+    getattr(user32, _name).restype = wintypes.BOOL
+user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+user32.ShowWindow.restype = wintypes.BOOL
+user32.MapVirtualKeyW.argtypes = [wintypes.UINT, wintypes.UINT]
+user32.MapVirtualKeyW.restype = wintypes.UINT
+user32.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int]
+user32.SendInput.restype = wintypes.UINT
+WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+user32.EnumWindows.argtypes = [WNDENUMPROC, wintypes.LPARAM]
+user32.EnumWindows.restype = wintypes.BOOL
+
 class PhantomBot:
     def __init__(self):
         self.hwnd = None
@@ -75,6 +99,11 @@ class PhantomBot:
         hwnd = user32.FindWindowW(None, "Megabonk")
         if not hwnd:
             hwnd = user32.FindWindowW("UnityWndClass", "Megabonk")
+        if hwnd and pid:
+            window_pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(window_pid))
+            if window_pid.value != pid:
+                hwnd = None
         if not hwnd and pid:
             holder = [0]
             def enum_proc_pid(h, lParam):
@@ -89,7 +118,7 @@ class PhantomBot:
             user32.EnumWindows(WNDENUMPROC(enum_proc_pid), 0)
             hwnd = holder[0]
 
-        if not hwnd:
+        if not hwnd and not pid:
             holder = [0]
             def enum_proc_title(h, lParam):
                 length = user32.GetWindowTextLengthW(h)
@@ -117,8 +146,7 @@ class PhantomBot:
         if pid:
             fg_pid = wintypes.DWORD()
             user32.GetWindowThreadProcessId(fg_hwnd, ctypes.byref(fg_pid))
-            if fg_pid.value == pid:
-                return True
+            return fg_pid.value == pid
         if self.hwnd and fg_hwnd == self.hwnd:
             return True
         length = user32.GetWindowTextLengthW(fg_hwnd)
@@ -149,7 +177,7 @@ class PhantomBot:
             pass
 
         time.sleep(0.05)
-        return True
+        return self.is_game_window_active(pid=pid)
 
     def read_game_reset_settings(self):
         """
@@ -179,6 +207,8 @@ class PhantomBot:
                 settings = data.get("cfGameSettings", {})
                 quick_reset = settings.get("quick_reset", 1)
                 quick_reset_time = float(settings.get("quick_reset_time", 0.1))
+                if not math.isfinite(quick_reset_time) or not 0 <= quick_reset_time <= 30:
+                    raise ValueError("Tiempo de reinicio inválido")
                 # Duracion segura y optimizada: 280ms (70ms mas rapido que los 350ms originales y con margen para que Unity jamas ignore 'R')
                 hold_dur = max(0.28, quick_reset_time + 0.15)
                 self._cached_reset_settings = {
@@ -199,35 +229,10 @@ class PhantomBot:
         Sin llamadas invasivas a ShowWindow() que rompen el foco exclusivo de DirectX.
         """
         settings = self.read_game_reset_settings()
+        if not settings.get("enabled", True) or not self.is_game_window_active(pid=pid):
+            return False
         hold_time = settings.get("hold_duration", 0.35)
-
-        if keyboard is not None:
-            try:
-                keyboard.press('r')
-                time.sleep(hold_time)
-                keyboard.release('r')
-                return True
-            except Exception:
-                pass
-
-        # Fallback nativo con Hardware Scan Code si keyboard fallase
-        scan_r = user32.MapVirtualKeyW(VK_R, 0)
-        inp_hw_down = INPUT()
-        inp_hw_down.type = INPUT_KEYBOARD
-        inp_hw_down.u.ki.wVk = 0
-        inp_hw_down.u.ki.wScan = scan_r
-        inp_hw_down.u.ki.dwFlags = KEYEVENTF_SCANCODE
-        user32.SendInput(1, ctypes.byref(inp_hw_down), ctypes.sizeof(INPUT))
-
-        time.sleep(hold_time)
-
-        inp_hw_up = INPUT()
-        inp_hw_up.type = INPUT_KEYBOARD
-        inp_hw_up.u.ki.wVk = 0
-        inp_hw_up.u.ki.wScan = scan_r
-        inp_hw_up.u.ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP
-        user32.SendInput(1, ctypes.byref(inp_hw_up), ctypes.sizeof(INPUT))
-        return True
+        return self.send_key(VK_R, hold_time=hold_time)
 
     def trigger_restart(self, pid=None):
         """
@@ -246,42 +251,23 @@ class PhantomBot:
                 pass
 
     def send_key(self, vk_code, hold_time=0.06):
-        """Envia pulsacion de tecla individual (util para Esc de Pausa AFK)"""
+        """Una pulsación física; siempre intenta soltar la tecla en finally."""
         scan = user32.MapVirtualKeyW(vk_code, 0)
-
-        # Hardware Scan Code
-        inp_hw_down = INPUT()
-        inp_hw_down.type = INPUT_KEYBOARD
-        inp_hw_down.u.ki.wVk = 0
-        inp_hw_down.u.ki.wScan = scan
-        inp_hw_down.u.ki.dwFlags = KEYEVENTF_SCANCODE
-        user32.SendInput(1, ctypes.byref(inp_hw_down), ctypes.sizeof(INPUT))
-
-        # Virtual Key
-        inp_vk_down = INPUT()
-        inp_vk_down.type = INPUT_KEYBOARD
-        inp_vk_down.u.ki.wVk = vk_code
-        inp_vk_down.u.ki.wScan = scan
-        inp_vk_down.u.ki.dwFlags = 0
-        user32.SendInput(1, ctypes.byref(inp_vk_down), ctypes.sizeof(INPUT))
-
-        time.sleep(hold_time)
-
-        # Hardware Scan Code Up
-        inp_hw_up = INPUT()
-        inp_hw_up.type = INPUT_KEYBOARD
-        inp_hw_up.u.ki.wVk = 0
-        inp_hw_up.u.ki.wScan = scan
-        inp_hw_up.u.ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP
-        user32.SendInput(1, ctypes.byref(inp_hw_up), ctypes.sizeof(INPUT))
-
-        # Virtual Key Up
-        inp_vk_up = INPUT()
-        inp_vk_up.type = INPUT_KEYBOARD
-        inp_vk_up.u.ki.wVk = vk_code
-        inp_vk_up.u.ki.wScan = scan
-        inp_vk_up.u.ki.dwFlags = KEYEVENTF_KEYUP
-        user32.SendInput(1, ctypes.byref(inp_vk_up), ctypes.sizeof(INPUT))
+        if not scan:
+            return False
+        down = INPUT(type=INPUT_KEYBOARD)
+        down.u.ki.wScan = scan
+        down.u.ki.dwFlags = KEYEVENTF_SCANCODE
+        up = INPUT(type=INPUT_KEYBOARD)
+        up.u.ki.wScan = scan
+        up.u.ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP
+        try:
+            if user32.SendInput(1, ctypes.byref(down), ctypes.sizeof(INPUT)) != 1:
+                return False
+            time.sleep(hold_time)
+        finally:
+            released = user32.SendInput(1, ctypes.byref(up), ctypes.sizeof(INPUT)) == 1
+        return released
 
     def trigger_afk_safety_pause(self, pid=None):
         """
@@ -289,19 +275,11 @@ class PhantomBot:
         una melodía de victoria audible para avisar al usuario.
         Envía UNA SOLA pulsación de ESC para evitar despausar por doble toque.
         """
-        self.focus_game(pid=pid)
+        if not self.focus_game(pid=pid):
+            return False
         time.sleep(0.06)
-
-        esc_sent = False
-        if keyboard is not None:
-            try:
-                keyboard.send('esc')
-                esc_sent = True
-            except Exception:
-                esc_sent = False
-
-        if not esc_sent:
-            self.send_key(VK_ESCAPE, hold_time=0.08)
+        if not self.is_game_window_active(pid=pid) or not self.send_key(VK_ESCAPE, hold_time=0.08):
+            return False
 
         # Melodía triunfal audible
         try:

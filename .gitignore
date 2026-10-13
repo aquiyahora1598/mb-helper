@@ -16,6 +16,8 @@ megabonk_helper.log
 *.log
 telemetry.db
 *.db
+*.db-wal
+*.db-shm
 *.sqlite3
 *.csv
 overlay_position.json
@@ -30,3 +32,5 @@ graphify-out/
 .env
 venv/
 ENV/
+.venv/
+video_output/
